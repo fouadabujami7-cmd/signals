@@ -15,15 +15,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: state.json
+          key: bot-state-${{ github.run_id }}
+          restore-keys: bot-state-
       - run: python bot.py
         env:
           CAP_API_KEY: ${{ secrets.CAP_API_KEY }}
           CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
           CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CAP_ENV: "live"
+          LIVE_CONFIRM: "I_UNDERSTAND"
+          RISK_PCT: "2"
+          MAX_DAILY_LOSS_EUR: "100"
+          TRADE_RISK_EUR: "25"
+          MAX_OPEN: "6"
+          MAX_PER_EPIC: "3"
+          BE_TRIGGER: "1"
+          GUARANTEED_STOP: "1"
           EPICS: "GOLD,OIL_CRUDE"
-          ENTRY_THR: "40"
-          MAX_LOSSES: "5"
-          MAX_HOLD_MIN: "30"
-          SIZE_MULT: "1"
+          SIZE_RANGES: "GOLD:1-10,OIL_CRUDE:50-200"
+          ENTRY_THR: "45"
+          REBOUND: "1"
+          REB_MOVE_ATR: "3"
+          REB_RETRACE: "0.5"
+          SL_MULT: "2"
+          RR: "1.5"
+          MAX_HOLD_MIN: "0"
+          AI_EVERY_MIN: "60"
           LOOP_MINUTES: "14"
           DRY_RUN: "0"
