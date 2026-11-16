@@ -21,6 +21,8 @@
   .asset .name span:last-child{direction:ltr;font-size:20px}
   .asset .word{font-size:46px;font-weight:900;margin:10px 0 4px}
   .asset .lv{font-size:14px;direction:rtl;opacity:.95}
+  .asset .bar{height:8px;border-radius:4px;background:rgba(0,0,0,.3);margin:10px auto 0;max-width:260px;overflow:hidden}
+  .asset .bar i{display:block;height:100%;background:#fff}
   .asset .why{font-size:13px;margin-top:8px;opacity:.85}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:14px}
   .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
@@ -34,6 +36,7 @@
   .err{color:#fca5a5;font-size:13px;margin-top:8px}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
   td{padding:5px 4px;border-bottom:1px solid var(--line)}
+  .ok{color:#4ade80}.no{color:#f87171}
   .note{font-size:12px;color:var(--mut);line-height:1.6;margin-top:14px}
 </style>
 </head>
@@ -64,10 +67,9 @@
     <details>
       <summary>⚙️ الإعدادات</summary>
       <div class="row" style="margin-top:10px">
-        <label>الفريم <select id="tf"><option value="1m">1 دقيقة</option><option value="5m" selected>5 دقائق</option></select></label>
+        <label>حد الانتظار (قوة أقل من) <input type="number" id="thr" value="15" step="5" min="0" max="80">%</label>
         <label>وقف = ATR × <input type="number" id="slMult" value="1.5" step="0.1"></label>
         <label>الهدف = الوقف × <input type="number" id="rr" value="1.5" step="0.1"></label>
-        <label><input type="checkbox" id="sess"> وقت لندن/نيويورك فقط</label>
         <label><input type="checkbox" id="aiAuto"> تحليل AI تلقائي كل 30 دقيقة</label>
       </div>
       <div style="margin-top:14px">
@@ -91,8 +93,8 @@
   </div>
 
   <div class="note">
-    كيف تُحسب النتيجة: التحليل الفني (اتجاه 15 دقيقة + تقاطع EMA 9/21 + RSI) يحدد توقيت الدخول، والذكاء الاصطناعي يبحث في الأخبار وآراء البنوك ومزاج المتداولين والأحداث الاقتصادية ويعطي الاتجاه المتوقع.
-    <b>شراء/بيع</b> فقط إذا كانت الإشارة الفنية موجودة والذكاء الاصطناعي لا يعاكسها، وغير ذلك <b>انتظار</b>.
+    كيف تُحسب النتيجة: البرنامج يجمع 8 عوامل على شموع الدقيقة (اتجاه 15 دقيقة، المتوسطات، ميلها، RSI، MACD، زخم آخر 5 دقائق، الشمعة الحالية، ورأي الذكاء الاصطناعي من الأخبار والبنوك) في نتيجة واحدة من -100 إلى +100 تتوقع اتجاه السعر خلال الدقائق الخمس القادمة.
+    موجب = <b>شراء</b>، سالب = <b>بيع</b>، وقريب من الصفر فقط (العوامل متعادلة تماماً) = <b>انتظار</b>. «الدقة السابقة» تبيّن كم مرة صدق التوقع فعلاً.
     الأسعار من عقود Binance الدائمة (XAUUSDT و CLUSDT) وتختلف بضعة دولارات عن منصتك — استخدم المعايرة 🎯 في الإعدادات مرة يومياً. أداة مساعدة وليست نصيحة مالية.
   </div>
 </div>
@@ -107,13 +109,13 @@ const ASSETS = {
   oil: { name: "النفط WTI", sources: [
     ["https://fapi.binance.com/fapi/v1/klines", "CLUSDT"]] },
 };
+const HORIZON = 5; // دقائق
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
 };
-let OFF = store.get("offsets", { gold: 0, oil: 0 }), soundOn = false, AI = store.get("ai_result", null), TECH = {}, lastFinal = {}, aiBusy = false;
+let OFF = store.get("offsets", { gold: 0, oil: 0 }), soundOn = false, AI = store.get("ai_result", null), TECH = {}, lastDir = {}, aiBusy = false;
 
-// ===== البيانات =====
 async function klines(asset, interval, limit) {
   let lastErr;
   for (const [base, sym] of ASSETS[asset].sources) {
@@ -130,7 +132,7 @@ async function klines(asset, interval, limit) {
 // ===== المؤشرات =====
 function ema(v, n) { const k = 2 / (n + 1), o = []; v.forEach((x, i) => o.push(i ? x * k + o[i - 1] * (1 - k) : x)); return o; }
 function rsi(c, n) {
-  const o = Array(c.length).fill(null); let g = 0, l = 0;
+  const o = Array(c.length).fill(50); let g = 0, l = 0;
   for (let i = 1; i < c.length; i++) {
     const d = c[i] - c[i - 1], u = Math.max(d, 0), w = Math.max(-d, 0);
     if (i <= n) { g += u; l += w; if (i === n) { g /= n; l /= n; o[i] = l ? 100 - 100 / (1 + g / l) : 100; } }
@@ -142,96 +144,111 @@ function atr(b, n) {
   const o = Array(b.length).fill(null); let a = 0;
   for (let i = 1; i < b.length; i++) {
     const tr = Math.max(b[i].h - b[i].l, Math.abs(b[i].h - b[i - 1].c), Math.abs(b[i].l - b[i - 1].c));
-    if (i <= n) { a += tr; if (i === n) { a /= n; o[i] = a; } } else { a = (a * (n - 1) + tr) / n; o[i] = a; }
+    if (i <= n) { a += tr; a = i === n ? a / n : a; if (i === n) o[i] = a; } else { a = (a * (n - 1) + tr) / n; o[i] = a; }
   }
   return o;
 }
-const berlinHour = ms => +new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Berlin", hour: "2-digit", hour12: false }).format(new Date(ms)) % 24;
+const clip = x => Math.max(-1, Math.min(1, x));
 const dec = p => p < 10 ? 3 : 2;
 const f = (v, p) => v == null || isNaN(v) ? "—" : v.toFixed(dec(p ?? v));
+const W = { buy: "شراء", sell: "بيع", wait: "انتظار" };
 
-// ===== التحليل الفني =====
-function analyze(all, h15all, o) {
+// ===== نموذج التوقع لخمس دقائق =====
+// كل عامل بين -1 و +1، والنتيجة النهائية بين -100 و +100
+const WEIGHTS = { trend: 2, cross: 1.5, slope: 1, rsi: 1, macd: 1, mom: 1.5, live: 0.5, ai: 2 };
+function factorsAt(i, X, liveBar) {
+  const a = X.A[i]; if (!a || X.trend[i] == null) return null;
+  const c = X.c;
+  const fx = {
+    trend: clip((c[i] - X.trend[i]) / (2 * a)),
+    cross: clip((X.eF[i] - X.eS[i]) / (0.5 * a)),
+    slope: clip((X.eF[i] - X.eF[i - 3]) / a),
+    rsi: clip((X.R[i] - 50) / 20),
+    macd: clip(X.hist[i] / (0.3 * a)),
+    mom: clip((c[i] - c[i - 5]) / (1.5 * a)),
+    live: liveBar ? clip((liveBar.c - liveBar.o) / a) : 0,
+  };
+  return fx;
+}
+function scoreOf(fx, aiF) {
+  let s = 0, w = 0;
+  for (const k in fx) { s += fx[k] * WEIGHTS[k]; w += WEIGHTS[k]; }
+  if (aiF != null) { s += aiF * WEIGHTS.ai; w += WEIGHTS.ai; }
+  return Math.round(s / w * 100);
+}
+function aiFactor(key) {
+  if (!aiFresh() || !AI.data[key]) return null;
+  const d = AI.data[key], c = (+d.confidence || 50) / 100;
+  return d.bias === "buy" ? c : d.bias === "sell" ? -c : 0;
+}
+
+function analyze(key, all, h15all, o) {
   const bars = all.slice(0, -1), live = all[all.length - 1], c = bars.map(b => b.c);
   const eF = ema(c, 9), eS = ema(c, 21), R = rsi(c, 14), A = atr(bars, 14);
+  const m12 = ema(c, 12), m26 = ema(c, 26), macd = m12.map((v, i) => v - m26[i]), sig = ema(macd, 9), hist = macd.map((v, i) => v - sig[i]);
   const h15 = h15all.slice(0, -1), e50 = ema(h15.map(b => b.c), 50), trend = Array(bars.length).fill(null);
   for (let i = 0, j = -1; i < bars.length; i++) {
     while (j + 1 < h15.length && h15[j + 1].ct <= bars[i].ct) j++;
     trend[i] = j >= 50 ? e50[j] : null;
   }
-  const inSess = i => !o.useSess || (berlinHour(bars[i].t) >= 9 && berlinHour(bars[i].t) < 22);
-  const sig = i => {
-    if (i < 1 || trend[i] == null || R[i] == null || A[i] == null || !inSess(i)) return null;
-    if (eF[i - 1] <= eS[i - 1] && eF[i] > eS[i] && c[i] > trend[i] && R[i] > 50) return "buy";
-    if (eF[i - 1] >= eS[i - 1] && eF[i] < eS[i] && c[i] < trend[i] && R[i] < 50) return "sell";
-    return null;
-  };
-  let pos = null, w = 0, L = 0, gp = 0, gl = 0;
-  const check = (p, b) => {
-    const sl = p.side === "buy" ? b.l <= p.sl : b.h >= p.sl, tp = p.side === "buy" ? b.h >= p.tp : b.l <= p.tp;
-    return sl ? -Math.abs(p.entry - p.sl) : tp ? Math.abs(p.tp - p.entry) : 0;
-  };
-  for (let i = 0; i < bars.length; i++) {
-    if (pos) { const r = check(pos, bars[i]); if (r) { r > 0 ? (w++, gp += r) : (L++, gl -= r); pos = null; } }
-    const s = sig(i);
-    if (s && !pos) { const d = A[i] * o.slMult; pos = { side: s, entry: c[i], sl: s === "buy" ? c[i] - d : c[i] + d, tp: s === "buy" ? c[i] + d * o.rr : c[i] - d * o.rr, idx: i }; }
+  const X = { c, eF, eS, R, A, hist, trend };
+
+  // اختبار الدقة: هل صدق اتجاه التوقع بعد 5 دقائق؟ (بدون AI لأنه غير متوفر تاريخياً)
+  let hit = 0, tot = 0;
+  for (let i = 30; i < bars.length - HORIZON; i++) {
+    const fx = factorsAt(i, X, null); if (!fx) continue;
+    fx.live = 0;
+    const s = scoreOf(fx, null); if (Math.abs(s) < o.thr) continue;
+    const move = c[i + HORIZON] - c[i]; if (move === 0) continue;
+    tot++; if (Math.sign(move) === Math.sign(s)) hit++;
   }
-  if (pos && check(pos, live)) pos = null;
-  const n = bars.length - 1;
+
+  const n = bars.length - 1, fx = factorsAt(n, X, live);
+  if (!fx) return { price: live.c, score: 0, dir: "wait", fx: null, acc: null };
+  const aiF = aiFactor(key), score = scoreOf(fx, aiF);
+  const dir = Math.abs(score) < o.thr ? "wait" : score > 0 ? "buy" : "sell";
+  const d = A[n] * o.slMult;
   return {
-    price: live.c, pos, age: pos ? n - pos.idx : null,
-    trendUp: trend[n] == null ? null : c[n] > trend[n], emaUp: eF[n] > eS[n], rsi: R[n], atr: A[n], inSess: inSess(n),
-    stats: { n: w + L, win: w + L ? Math.round(w / (w + L) * 100) : null, net: gp - gl },
+    price: live.c, score, dir, fx, aiF, rsi: R[n],
+    sl: dir === "buy" ? live.c - d : live.c + d,
+    tp: dir === "buy" ? live.c + d * o.rr : live.c - d * o.rr,
+    acc: tot ? { pct: Math.round(hit / tot * 100), n: tot } : null,
   };
 }
 
-// ===== دمج الفني + الذكاء الاصطناعي =====
 function aiFresh() { return AI && Date.now() - AI.time < 90 * 60 * 1000; }
-function decide(key) {
-  const t = TECH[key]; if (!t || t.error) return { word: "—", cls: "wait" };
-  const tech = t.pos ? t.pos.side : "wait";
-  const ai = aiFresh() && AI.data[key] ? AI.data[key].bias : null;
-  let final = "wait";
-  if (tech !== "wait") final = !ai || ai === tech || ai === "wait" ? tech : "wait";
-  return { final, tech, ai };
-}
-const W = { buy: "شراء", sell: "بيع", wait: "انتظار" };
 
 function render() {
   $("cards").innerHTML = Object.keys(ASSETS).map(k => {
     const t = TECH[k], A = ASSETS[k];
     if (!t) return `<div class="asset"><div class="name"><span>${A.name}</span><span>…</span></div><div class="word">…</div></div>`;
     if (t.error) return `<div class="asset"><div class="name"><span>${A.name}</span><span>—</span></div><div class="word" style="font-size:22px">تعذّر جلب السعر</div><div class="why">${t.error}</div></div>`;
-    const d = decide(k), col = d.final === "buy" ? "var(--buy)" : d.final === "sell" ? "var(--sell)" : "var(--wait)";
-    const o = OFF[k] || 0;
-    const lv = d.final !== "wait" && t.pos ? `<div class="lv">دخول ${f(t.pos.entry + o)} · وقف ${f(t.pos.sl + o)} · هدف ${f(t.pos.tp + o)}</div>` : "";
-    const aiTxt = d.ai ? `AI: ${W[d.ai]} ${AI.data[k].confidence ?? ""}%` : "AI: غير مفعّل";
+    const o = OFF[k] || 0, col = t.dir === "buy" ? "var(--buy)" : t.dir === "sell" ? "var(--sell)" : "var(--wait)";
+    const strength = Math.abs(t.score);
+    const lv = t.dir !== "wait" ? `<div class="lv">دخول ${f(t.price + o)} · وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
     return `<div class="asset" style="background:${col}">
       <div class="name"><span>${A.name}${o ? " 🎯" : ""}</span><span>$${f(t.price + o)}</span></div>
-      <div class="word">${W[d.final]}</div>${lv}
-      <div class="why">فني: ${W[d.tech]} · ${aiTxt}</div></div>`;
+      <div class="word">${W[t.dir]}</div>${lv}
+      <div class="bar"><i style="width:${strength}%"></i></div>
+      <div class="why">القوة ${strength}% · ${t.aiF != null ? "مع الذكاء الاصطناعي" : "بدون الذكاء الاصطناعي"}${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div></div>`;
   }).join("");
 
-  // تنبيه صوتي عند إشارة جديدة
   for (const k of Object.keys(ASSETS)) {
-    const d = decide(k); if (!d.final) continue;
-    const key = d.final + (TECH[k].pos ? TECH[k].pos.entry : "");
-    if (d.final !== "wait" && lastFinal[k] !== undefined && lastFinal[k] !== key) beep();
-    lastFinal[k] = key;
+    const t = TECH[k]; if (!t || t.error) continue;
+    if (t.dir !== "wait" && lastDir[k] !== undefined && lastDir[k] !== t.dir) beep();
+    lastDir[k] = t.dir;
   }
 
-  // التفاصيل
-  const rows = Object.keys(ASSETS).map(k => {
-    const t = TECH[k]; if (!t || t.error) return "";
-    return `<tr><td colspan="2" style="color:var(--gold);font-weight:700;padding-top:12px">${ASSETS[k].name} <span class="mut">(${t.sym})</span></td></tr>
-      <tr><td>اتجاه 15 دقيقة</td><td>${t.trendUp == null ? "—" : t.trendUp ? "صاعد ⬆" : "هابط ⬇"}</td></tr>
-      <tr><td>EMA 9/21</td><td>${t.emaUp ? "صاعد ⬆" : "هابط ⬇"}</td></tr>
-      <tr><td>RSI</td><td>${f(t.rsi, 99)}</td></tr>
-      <tr><td>الجلسة</td><td>${t.inSess ? "مفتوحة ✓" : "خارج الوقت ✗"}</td></tr>
-      <tr><td>صفقة فنية مفتوحة</td><td>${t.pos ? W[t.pos.side] + " منذ " + t.age + " شمعة" : "لا"}</td></tr>
-      <tr><td>اختبار آخر 1000 شمعة</td><td>${t.stats.n} صفقة · نجاح ${t.stats.win ?? "—"}% · صافي ${f(t.stats.net)}$</td></tr>`;
-  }).join("");
-  $("details").innerHTML = `<table>${rows}</table>`;
+  const name = { trend: "اتجاه 15 دقيقة", cross: "EMA 9/21", slope: "ميل المتوسط", rsi: "RSI", macd: "MACD", mom: "زخم آخر 5 دقائق", live: "الشمعة الحالية" };
+  const arrow = v => v > 0.15 ? `<span class="ok">⬆ ${Math.round(v * 100)}</span>` : v < -0.15 ? `<span class="no">⬇ ${Math.round(v * 100)}</span>` : `<span class="mut">↔ ${Math.round(v * 100)}</span>`;
+  $("details").innerHTML = "<table>" + Object.keys(ASSETS).map(k => {
+    const t = TECH[k]; if (!t || t.error || !t.fx) return "";
+    return `<tr><td colspan="2" style="color:var(--gold);font-weight:700;padding-top:12px">${ASSETS[k].name} <span class="mut">(${t.sym}) · النتيجة ${t.score > 0 ? "+" : ""}${t.score}</span></td></tr>` +
+      Object.keys(t.fx).map(x => `<tr><td>${name[x]}</td><td>${arrow(t.fx[x])}</td></tr>`).join("") +
+      `<tr><td>الذكاء الاصطناعي</td><td>${t.aiF == null ? '<span class="mut">غير مفعّل</span>' : arrow(t.aiF)}</td></tr>` +
+      `<tr><td>دقة التوقع (آخر 16 ساعة)</td><td>${t.acc ? t.acc.pct + "% من " + t.acc.n + " توقع" : "—"}</td></tr>`;
+  }).join("") + "</table>";
+
   if (AI) {
     const m = Math.round((Date.now() - AI.time) / 60000);
     $("aiStatus").textContent = `آخر تحليل AI قبل ${m} دقيقة` + (aiFresh() ? "" : " (قديم — شغّله من جديد)");
@@ -242,42 +259,37 @@ function render() {
 }
 
 async function runTech() {
-  const o = { slMult: +$("slMult").value || 1.5, rr: +$("rr").value || 1.5, useSess: $("sess").checked }, tf = $("tf").value;
+  const o = { slMult: +$("slMult").value || 1.5, rr: +$("rr").value || 1.5, thr: Math.max(0, +$("thr").value || 0) };
+  store.set("thr", o.thr);
   await Promise.all(Object.keys(ASSETS).map(async k => {
     try {
-      const [a, h] = await Promise.all([klines(k, tf, 1000), klines(k, "15m", tf === "1m" ? 200 : 500)]);
-      TECH[k] = { ...analyze(a.bars, h.bars, o), sym: a.sym };
+      const [a, h] = await Promise.all([klines(k, "1m", 1000), klines(k, "15m", 200)]);
+      TECH[k] = { ...analyze(k, a.bars, h.bars, o), sym: a.sym };
     } catch (e) {
-      TECH[k] = { error: location.protocol === "file:" ? "تأكد من الإنترنت" : "افتح الملف بمتصفح Chrome (تطبيق Claude يمنع الإنترنت)" };
+      TECH[k] = { error: location.protocol === "file:" || location.protocol === "https:" ? "تأكد من الإنترنت" : "افتح البرنامج بمتصفح Chrome" };
     }
   }));
-  $("updated").textContent = "آخر تحديث: " + new Date().toLocaleTimeString("de-DE") + " · فريم " + tf + " · تحديث كل 15 ثانية";
+  $("updated").textContent = "آخر تحديث: " + new Date().toLocaleTimeString("de-DE") + " · توقع الدقائق الخمس القادمة · تحديث كل 10 ثوانٍ";
   render();
 }
 
-// ===== الذكاء الاصطناعي =====
 async function runAI() {
   const key = store.get("api_key", "");
   if (!key) { $("aiStatus").textContent = "⚠️ أضف مفتاح Anthropic API من الإعدادات أولاً."; return; }
   if (aiBusy) return; aiBusy = true;
   $("aiStatus").textContent = "⏳ الذكاء الاصطناعي يبحث في الأخبار والتحليلات… (قد يأخذ دقيقة)";
   const techLine = k => { const t = TECH[k]; return !t || t.error ? "غير متوفر" :
-    `السعر ${f(t.price)}، اتجاه 15د ${t.trendUp ? "صاعد" : "هابط"}، RSI ${f(t.rsi, 99)}، إشارة فنية: ${t.pos ? W[t.pos.side] : "لا يوجد"}`; };
+    `السعر ${f(t.price)}، النتيجة الفنية ${t.score} من 100 (موجب=صعود)، RSI ${f(t.rsi, 99)}`; };
   const now = new Date().toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
-  const prompt = `أنت محلل أسواق. الوقت الآن ${now} (توقيت برلين).
+  const prompt = `أنت محلل أسواق للمضاربة السريعة. الوقت الآن ${now} (توقيت برلين).
 البيانات الفنية الحالية:
 - الذهب XAUUSD: ${techLine("gold")}
 - النفط WTI: ${techLine("oil")}
 
-استخدم البحث على الإنترنت لجمع أحدث المعلومات (آخر 24 ساعة) عن الذهب والنفط:
-1) الأخبار المؤثرة والأحداث الجيوسياسية.
-2) الفيدرالي الأمريكي والدولار وعوائد السندات، وبالنسبة للنفط: أوبك+ والمخزونات الأمريكية.
-3) آراء وتوقعات البنوك الكبرى (Goldman Sachs، JPMorgan، UBS، Citi وغيرها).
-4) مزاج المتداولين (نسب الشراء/البيع لدى المتداولين الأفراد، مراكز COT إن وجدت).
-5) الأحداث الاقتصادية المهمة اليوم التي قد تحرك السعر.
+استخدم البحث على الإنترنت لجمع أحدث المعلومات (آخر 24 ساعة) عن الذهب والنفط: الأخبار المؤثرة والجيوسياسية، الفيدرالي والدولار والعوائد، أوبك+ والمخزونات، آراء البنوك الكبرى، مزاج المتداولين، والأحداث الاقتصادية القريبة اليوم.
 
-ثم أعطِ الاتجاه المتوقع للساعات القادمة (للسكالبينغ) لكل أصل. إذا كان هناك خبر قوي قريب أو الصورة متضاربة، اختر "wait".
-أجب في النهاية بـ JSON فقط بهذا الشكل بدون أي نص بعده:
+ثم قرر الاتجاه الأرجح على المدى القصير جداً (الساعة القادمة). كن حاسماً: اختر buy أو sell دائماً، واختر "wait" فقط إذا كان هناك خبر قوي جداً خلال 30 دقيقة أو الصورة متعادلة تماماً. confidence تعكس قوة قناعتك.
+أجب في النهاية بـ JSON فقط بدون أي نص بعده:
 {"gold":{"bias":"buy|sell|wait","confidence":0-100,"reason":"جملة عربية قصيرة"},"oil":{"bias":"buy|sell|wait","confidence":0-100,"reason":"جملة عربية قصيرة"},"events":"أهم حدث اليوم بجملة عربية قصيرة"}`;
   try {
     let messages = [{ role: "user", content: prompt }], data = null;
@@ -302,7 +314,7 @@ async function runAI() {
     $("aiStatus").textContent = "❌ خطأ في تحليل AI: " + e.message;
     aiBusy = false; return;
   }
-  aiBusy = false; render();
+  aiBusy = false; runTech();
 }
 
 function beep() {
@@ -317,6 +329,7 @@ function beep() {
 // ===== التشغيل =====
 $("apiKey").value = store.get("api_key", "");
 $("aiAuto").checked = store.get("ai_auto", false);
+$("thr").value = store.get("thr", 15);
 $("saveKey").onclick = () => { store.set("api_key", $("apiKey").value.trim()); $("aiStatus").textContent = "✓ تم حفظ المفتاح. اضغط زر التحليل."; };
 $("aiAuto").onchange = () => store.set("ai_auto", $("aiAuto").checked);
 $("aiBtn").onclick = runAI;
@@ -331,9 +344,9 @@ $("calBtn").onclick = () => {
 $("calReset").onclick = () => { OFF = { gold: 0, oil: 0 }; store.set("offsets", OFF); calInfo(); render(); };
 calInfo();
 $("soundBtn").onclick = () => { soundOn = !soundOn; $("soundBtn").textContent = soundOn ? "🔔 الصوت مفعّل" : "🔔 تفعيل الصوت"; if (soundOn) beep(); };
-["tf", "slMult", "rr", "sess"].forEach(id => $(id).addEventListener("change", runTech));
+["slMult", "rr", "thr"].forEach(id => $(id).addEventListener("change", runTech));
 render(); runTech();
-setInterval(runTech, 15000);
+setInterval(runTech, 10000);
 setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30 * 60000) runAI(); }, 60000);
 </script>
 </body>
