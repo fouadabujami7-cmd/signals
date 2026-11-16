@@ -1,0 +1,46 @@
+name: trading-bot
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: bot
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: state.json
+          key: bot-state-${{ github.run_id }}
+          restore-keys: bot-state-
+      - run: python bot.py
+        env:
+          CAP_API_KEY: ${{ secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # ===== الحساب: demo أو live =====
+          CAP_ENV: "demo"
+          LIVE_CONFIRM: ""
+          # ===== المخاطرة =====
+          RISK_PCT: "2"
+          MAX_DAILY_LOSS_PCT: "5"
+          MAX_OPEN: "5"
+          GUARANTEED_STOP: "1"
+          # ===== الاستراتيجية =====
+          EPICS: "GOLD,OIL_CRUDE"
+          SIZE_RANGES: "GOLD:1-10,OIL_CRUDE:50-200"
+          ENTRY_THR: "45"
+          SL_MULT: "2"
+          RR: "1.5"
+          MAX_HOLD_MIN: "0"
+          AI_EVERY_MIN: "60"
+          LOOP_MINUTES: "14"
+          DRY_RUN: "0"
