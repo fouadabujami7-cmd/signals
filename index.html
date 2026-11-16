@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إشارات الذهب والنفط</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0f1115">
+<meta name="mobile-web-app-capable" content="yes">
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#262a33;--txt:#e8e8ea;--mut:#8b90a0;--buy:#16a34a;--sell:#dc2626;--wait:#475569;--gold:#e0b84f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:15px}
+  .wrap{max-width:720px;margin:0 auto;padding:14px}
+  h1{font-size:19px;margin:0;color:var(--gold)}
+  .mut{color:var(--mut);font-size:12px}
+  .asset{border-radius:16px;padding:18px 16px;margin-top:14px;text-align:center;transition:background .3s;background:var(--wait)}
+  .asset .name{font-size:17px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+  .asset .name span:last-child{direction:ltr;font-size:20px}
+  .asset .word{font-size:46px;font-weight:900;margin:10px 0 4px}
+  .asset .lv{font-size:14px;direction:rtl;opacity:.95}
+  .asset .why{font-size:13px;margin-top:8px;opacity:.85}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:14px}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  label{display:flex;align-items:center;gap:6px;font-size:14px}
+  select,input{background:#0f1115;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px}
+  input[type=number]{width:64px}
+  button{background:var(--gold);color:#111;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}
+  button.sec{background:#2a2f3a;color:var(--txt)}
+  details summary{cursor:pointer;font-weight:700}
+  .ai-box{white-space:pre-wrap;line-height:1.7;font-size:14px;margin-top:8px}
+  .err{color:#fca5a5;font-size:13px;margin-top:8px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  td{padding:5px 4px;border-bottom:1px solid var(--line)}
+  .note{font-size:12px;color:var(--mut);line-height:1.6;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>إشارات الذهب والنفط</h1>
+  <div class="mut" id="updated">جاري التحميل…</div>
+
+  <div id="cards"></div>
+
+  <div class="card">
+    <div class="row">
+      <button id="aiBtn">🤖 تحليل الذكاء الاصطناعي الآن</button>
+      <button id="soundBtn" class="sec">🔔 تفعيل الصوت</button>
+    </div>
+    <div class="mut" id="aiStatus" style="margin-top:8px">لم يتم تشغيل تحليل الذكاء الاصطناعي بعد.</div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>التفاصيل</summary>
+      <div id="details"></div>
+      <div class="ai-box" id="aiText"></div>
+    </details>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>⚙️ الإعدادات</summary>
+      <div class="row" style="margin-top:10px">
+        <label>الفريم <select id="tf"><option value="1m">1 دقيقة</option><option value="5m" selected>5 دقائق</option></select></label>
+        <label>وقف = ATR × <input type="number" id="slMult" value="1.5" step="0.1"></label>
+        <label>الهدف = الوقف × <input type="number" id="rr" value="1.5" step="0.1"></label>
+        <label><input type="checkbox" id="sess"> وقت لندن/نيويورك فقط</label>
+        <label><input type="checkbox" id="aiAuto"> تحليل AI تلقائي كل 30 دقيقة</label>
+      </div>
+      <div style="margin-top:14px">
+        <label style="display:block">🎯 معايرة السعر مع منصتك: اكتب سعر الشراء الظاهر في منصتك الآن</label>
+        <div class="row" style="margin-top:6px">
+          <label>الذهب <input id="calGold" type="number" step="0.01" inputmode="decimal" style="width:100px;direction:ltr"></label>
+          <label>النفط <input id="calOil" type="number" step="0.01" inputmode="decimal" style="width:100px;direction:ltr"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="calBtn" class="sec">معايرة</button>
+          <button id="calReset" class="sec">إلغاء المعايرة</button>
+        </div>
+        <div class="mut" id="calStatus" style="margin-top:6px"></div>
+      </div>
+      <div style="margin-top:12px">
+        <label style="display:block">مفتاح Anthropic API (يُحفظ على جهازك فقط):</label>
+        <input id="apiKey" type="password" placeholder="sk-ant-..." style="width:100%;margin-top:6px;direction:ltr">
+        <button id="saveKey" class="sec" style="margin-top:8px">حفظ المفتاح</button>
+      </div>
+    </details>
+  </div>
+
+  <div class="note">
+    كيف تُحسب النتيجة: التحليل الفني (اتجاه 15 دقيقة + تقاطع EMA 9/21 + RSI) يحدد توقيت الدخول، والذكاء الاصطناعي يبحث في الأخبار وآراء البنوك ومزاج المتداولين والأحداث الاقتصادية ويعطي الاتجاه المتوقع.
+    <b>شراء/بيع</b> فقط إذا كانت الإشارة الفنية موجودة والذكاء الاصطناعي لا يعاكسها، وغير ذلك <b>انتظار</b>.
+    الأسعار من عقود Binance الدائمة (XAUUSDT و CLUSDT) وتختلف بضعة دولارات عن منصتك — استخدم المعايرة 🎯 في الإعدادات مرة يومياً. أداة مساعدة وليست نصيحة مالية.
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ASSETS = {
+  gold: { name: "الذهب", sources: [
+    ["https://fapi.binance.com/fapi/v1/klines", "XAUUSDT"],
+    ["https://api.binance.com/api/v3/klines", "PAXGUSDT"],
+    ["https://data-api.binance.vision/api/v3/klines", "PAXGUSDT"]] },
+  oil: { name: "النفط WTI", sources: [
+    ["https://fapi.binance.com/fapi/v1/klines", "CLUSDT"]] },
+};
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+let OFF = store.get("offsets", { gold: 0, oil: 0 }), soundOn = false, AI = store.get("ai_result", null), TECH = {}, lastFinal = {}, aiBusy = false;
+
+// ===== البيانات =====
+async function klines(asset, interval, limit) {
+  let lastErr;
+  for (const [base, sym] of ASSETS[asset].sources) {
+    try {
+      const r = await fetch(`${base}?symbol=${sym}&interval=${interval}&limit=${limit}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      return { sym, bars: d.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], ct: k[6] })) };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+// ===== المؤشرات =====
+function ema(v, n) { const k = 2 / (n + 1), o = []; v.forEach((x, i) => o.push(i ? x * k + o[i - 1] * (1 - k) : x)); return o; }
+function rsi(c, n) {
+  const o = Array(c.length).fill(null); let g = 0, l = 0;
+  for (let i = 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1], u = Math.max(d, 0), w = Math.max(-d, 0);
+    if (i <= n) { g += u; l += w; if (i === n) { g /= n; l /= n; o[i] = l ? 100 - 100 / (1 + g / l) : 100; } }
+    else { g = (g * (n - 1) + u) / n; l = (l * (n - 1) + w) / n; o[i] = l ? 100 - 100 / (1 + g / l) : 100; }
+  }
+  return o;
+}
+function atr(b, n) {
+  const o = Array(b.length).fill(null); let a = 0;
+  for (let i = 1; i < b.length; i++) {
+    const tr = Math.max(b[i].h - b[i].l, Math.abs(b[i].h - b[i - 1].c), Math.abs(b[i].l - b[i - 1].c));
+    if (i <= n) { a += tr; if (i === n) { a /= n; o[i] = a; } } else { a = (a * (n - 1) + tr) / n; o[i] = a; }
+  }
+  return o;
+}
+const berlinHour = ms => +new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Berlin", hour: "2-digit", hour12: false }).format(new Date(ms)) % 24;
+const dec = p => p < 10 ? 3 : 2;
+const f = (v, p) => v == null || isNaN(v) ? "—" : v.toFixed(dec(p ?? v));
+
+// ===== التحليل الفني =====
+function analyze(all, h15all, o) {
+  const bars = all.slice(0, -1), live = all[all.length - 1], c = bars.map(b => b.c);
+  const eF = ema(c, 9), eS = ema(c, 21), R = rsi(c, 14), A = atr(bars, 14);
+  const h15 = h15all.slice(0, -1), e50 = ema(h15.map(b => b.c), 50), trend = Array(bars.length).fill(null);
+  for (let i = 0, j = -1; i < bars.length; i++) {
+    while (j + 1 < h15.length && h15[j + 1].ct <= bars[i].ct) j++;
+    trend[i] = j >= 50 ? e50[j] : null;
+  }
+  const inSess = i => !o.useSess || (berlinHour(bars[i].t) >= 9 && berlinHour(bars[i].t) < 22);
+  const sig = i => {
+    if (i < 1 || trend[i] == null || R[i] == null || A[i] == null || !inSess(i)) return null;
+    if (eF[i - 1] <= eS[i - 1] && eF[i] > eS[i] && c[i] > trend[i] && R[i] > 50) return "buy";
+    if (eF[i - 1] >= eS[i - 1] && eF[i] < eS[i] && c[i] < trend[i] && R[i] < 50) return "sell";
+    return null;
+  };
+  let pos = null, w = 0, L = 0, gp = 0, gl = 0;
+  const check = (p, b) => {
+    const sl = p.side === "buy" ? b.l <= p.sl : b.h >= p.sl, tp = p.side === "buy" ? b.h >= p.tp : b.l <= p.tp;
+    return sl ? -Math.abs(p.entry - p.sl) : tp ? Math.abs(p.tp - p.entry) : 0;
+  };
+  for (let i = 0; i < bars.length; i++) {
+    if (pos) { const r = check(pos, bars[i]); if (r) { r > 0 ? (w++, gp += r) : (L++, gl -= r); pos = null; } }
+    const s = sig(i);
+    if (s && !pos) { const d = A[i] * o.slMult; pos = { side: s, entry: c[i], sl: s === "buy" ? c[i] - d : c[i] + d, tp: s === "buy" ? c[i] + d * o.rr : c[i] - d * o.rr, idx: i }; }
+  }
+  if (pos && check(pos, live)) pos = null;
+  const n = bars.length - 1;
+  return {
+    price: live.c, pos, age: pos ? n - pos.idx : null,
+    trendUp: trend[n] == null ? null : c[n] > trend[n], emaUp: eF[n] > eS[n], rsi: R[n], atr: A[n], inSess: inSess(n),
+    stats: { n: w + L, win: w + L ? Math.round(w / (w + L) * 100) : null, net: gp - gl },
+  };
+}
+
+// ===== دمج الفني + الذكاء الاصطناعي =====
+function aiFresh() { return AI && Date.now() - AI.time < 90 * 60 * 1000; }
+function decide(key) {
+  const t = TECH[key]; if (!t || t.error) return { word: "—", cls: "wait" };
+  const tech = t.pos ? t.pos.side : "wait";
+  const ai = aiFresh() && AI.data[key] ? AI.data[key].bias : null;
+  let final = "wait";
+  if (tech !== "wait") final = !ai || ai === tech || ai === "wait" ? tech : "wait";
+  return { final, tech, ai };
+}
+const W = { buy: "شراء", sell: "بيع", wait: "انتظار" };
+
+function render() {
+  $("cards").innerHTML = Object.keys(ASSETS).map(k => {
+    const t = TECH[k], A = ASSETS[k];
+    if (!t) return `<div class="asset"><div class="name"><span>${A.name}</span><span>…</span></div><div class="word">…</div></div>`;
+    if (t.error) return `<div class="asset"><div class="name"><span>${A.name}</span><span>—</span></div><div class="word" style="font-size:22px">تعذّر جلب السعر</div><div class="why">${t.error}</div></div>`;
+    const d = decide(k), col = d.final === "buy" ? "var(--buy)" : d.final === "sell" ? "var(--sell)" : "var(--wait)";
+    const o = OFF[k] || 0;
+    const lv = d.final !== "wait" && t.pos ? `<div class="lv">دخول ${f(t.pos.entry + o)} · وقف ${f(t.pos.sl + o)} · هدف ${f(t.pos.tp + o)}</div>` : "";
+    const aiTxt = d.ai ? `AI: ${W[d.ai]} ${AI.data[k].confidence ?? ""}%` : "AI: غير مفعّل";
+    return `<div class="asset" style="background:${col}">
+      <div class="name"><span>${A.name}${o ? " 🎯" : ""}</span><span>$${f(t.price + o)}</span></div>
+      <div class="word">${W[d.final]}</div>${lv}
+      <div class="why">فني: ${W[d.tech]} · ${aiTxt}</div></div>`;
+  }).join("");
+
+  // تنبيه صوتي عند إشارة جديدة
+  for (const k of Object.keys(ASSETS)) {
+    const d = decide(k); if (!d.final) continue;
+    const key = d.final + (TECH[k].pos ? TECH[k].pos.entry : "");
+    if (d.final !== "wait" && lastFinal[k] !== undefined && lastFinal[k] !== key) beep();
+    lastFinal[k] = key;
+  }
+
+  // التفاصيل
+  const rows = Object.keys(ASSETS).map(k => {
+    const t = TECH[k]; if (!t || t.error) return "";
+    return `<tr><td colspan="2" style="color:var(--gold);font-weight:700;padding-top:12px">${ASSETS[k].name} <span class="mut">(${t.sym})</span></td></tr>
+      <tr><td>اتجاه 15 دقيقة</td><td>${t.trendUp == null ? "—" : t.trendUp ? "صاعد ⬆" : "هابط ⬇"}</td></tr>
+      <tr><td>EMA 9/21</td><td>${t.emaUp ? "صاعد ⬆" : "هابط ⬇"}</td></tr>
+      <tr><td>RSI</td><td>${f(t.rsi, 99)}</td></tr>
+      <tr><td>الجلسة</td><td>${t.inSess ? "مفتوحة ✓" : "خارج الوقت ✗"}</td></tr>
+      <tr><td>صفقة فنية مفتوحة</td><td>${t.pos ? W[t.pos.side] + " منذ " + t.age + " شمعة" : "لا"}</td></tr>
+      <tr><td>اختبار آخر 1000 شمعة</td><td>${t.stats.n} صفقة · نجاح ${t.stats.win ?? "—"}% · صافي ${f(t.stats.net)}$</td></tr>`;
+  }).join("");
+  $("details").innerHTML = `<table>${rows}</table>`;
+  if (AI) {
+    const m = Math.round((Date.now() - AI.time) / 60000);
+    $("aiStatus").textContent = `آخر تحليل AI قبل ${m} دقيقة` + (aiFresh() ? "" : " (قديم — شغّله من جديد)");
+    $("aiText").textContent = "🤖 تحليل الذكاء الاصطناعي:\n" +
+      Object.keys(ASSETS).map(k => AI.data[k] ? `• ${ASSETS[k].name}: ${W[AI.data[k].bias] || "—"} (${AI.data[k].confidence}%) — ${AI.data[k].reason}` : "").join("\n") +
+      (AI.data.events ? `\n• أحداث مهمة: ${AI.data.events}` : "");
+  }
+}
+
+async function runTech() {
+  const o = { slMult: +$("slMult").value || 1.5, rr: +$("rr").value || 1.5, useSess: $("sess").checked }, tf = $("tf").value;
+  await Promise.all(Object.keys(ASSETS).map(async k => {
+    try {
+      const [a, h] = await Promise.all([klines(k, tf, 1000), klines(k, "15m", tf === "1m" ? 200 : 500)]);
+      TECH[k] = { ...analyze(a.bars, h.bars, o), sym: a.sym };
+    } catch (e) {
+      TECH[k] = { error: location.protocol === "file:" ? "تأكد من الإنترنت" : "افتح الملف بمتصفح Chrome (تطبيق Claude يمنع الإنترنت)" };
+    }
+  }));
+  $("updated").textContent = "آخر تحديث: " + new Date().toLocaleTimeString("de-DE") + " · فريم " + tf + " · تحديث كل 15 ثانية";
+  render();
+}
+
+// ===== الذكاء الاصطناعي =====
+async function runAI() {
+  const key = store.get("api_key", "");
+  if (!key) { $("aiStatus").textContent = "⚠️ أضف مفتاح Anthropic API من الإعدادات أولاً."; return; }
+  if (aiBusy) return; aiBusy = true;
+  $("aiStatus").textContent = "⏳ الذكاء الاصطناعي يبحث في الأخبار والتحليلات… (قد يأخذ دقيقة)";
+  const techLine = k => { const t = TECH[k]; return !t || t.error ? "غير متوفر" :
+    `السعر ${f(t.price)}، اتجاه 15د ${t.trendUp ? "صاعد" : "هابط"}، RSI ${f(t.rsi, 99)}، إشارة فنية: ${t.pos ? W[t.pos.side] : "لا يوجد"}`; };
+  const now = new Date().toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
+  const prompt = `أنت محلل أسواق. الوقت الآن ${now} (توقيت برلين).
+البيانات الفنية الحالية:
+- الذهب XAUUSD: ${techLine("gold")}
+- النفط WTI: ${techLine("oil")}
+
+استخدم البحث على الإنترنت لجمع أحدث المعلومات (آخر 24 ساعة) عن الذهب والنفط:
+1) الأخبار المؤثرة والأحداث الجيوسياسية.
+2) الفيدرالي الأمريكي والدولار وعوائد السندات، وبالنسبة للنفط: أوبك+ والمخزونات الأمريكية.
+3) آراء وتوقعات البنوك الكبرى (Goldman Sachs، JPMorgan، UBS، Citi وغيرها).
+4) مزاج المتداولين (نسب الشراء/البيع لدى المتداولين الأفراد، مراكز COT إن وجدت).
+5) الأحداث الاقتصادية المهمة اليوم التي قد تحرك السعر.
+
+ثم أعطِ الاتجاه المتوقع للساعات القادمة (للسكالبينغ) لكل أصل. إذا كان هناك خبر قوي قريب أو الصورة متضاربة، اختر "wait".
+أجب في النهاية بـ JSON فقط بهذا الشكل بدون أي نص بعده:
+{"gold":{"bias":"buy|sell|wait","confidence":0-100,"reason":"جملة عربية قصيرة"},"oil":{"bias":"buy|sell|wait","confidence":0-100,"reason":"جملة عربية قصيرة"},"events":"أهم حدث اليوم بجملة عربية قصيرة"}`;
+  try {
+    let messages = [{ role: "user", content: prompt }], data = null;
+    for (let step = 0; step < 4 && !data; step++) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 2000, messages,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }] }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error?.message || "HTTP " + r.status);
+      if (j.stop_reason === "pause_turn") { messages = [...messages, { role: "assistant", content: j.content }]; continue; }
+      const text = j.content.filter(b => b.type === "text").map(b => b.text).join("");
+      const m = text.match(/\{[\s\S]*\}\s*$/) || text.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error("لم يرجع الذكاء الاصطناعي نتيجة مفهومة");
+      data = JSON.parse(m[0]);
+    }
+    if (!data) throw new Error("انتهت المحاولات بدون نتيجة");
+    AI = { time: Date.now(), data }; store.set("ai_result", AI);
+  } catch (e) {
+    $("aiStatus").textContent = "❌ خطأ في تحليل AI: " + e.message;
+    aiBusy = false; return;
+  }
+  aiBusy = false; render();
+}
+
+function beep() {
+  if (!soundOn) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, .25].forEach(d => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(.25, ctx.currentTime + d); o.start(ctx.currentTime + d); o.stop(ctx.currentTime + d + .18); });
+  } catch (e) {}
+}
+
+// ===== التشغيل =====
+$("apiKey").value = store.get("api_key", "");
+$("aiAuto").checked = store.get("ai_auto", false);
+$("saveKey").onclick = () => { store.set("api_key", $("apiKey").value.trim()); $("aiStatus").textContent = "✓ تم حفظ المفتاح. اضغط زر التحليل."; };
+$("aiAuto").onchange = () => store.set("ai_auto", $("aiAuto").checked);
+$("aiBtn").onclick = runAI;
+const calInfo = () => { $("calStatus").textContent = ["gold", "oil"].map(k => OFF[k] ? `${ASSETS[k].name}: فرق ${OFF[k] > 0 ? "+" : ""}${f(OFF[k])}` : "").filter(Boolean).join(" · ") || "بدون معايرة"; };
+$("calBtn").onclick = () => {
+  for (const [k, id] of [["gold", "calGold"], ["oil", "calOil"]]) {
+    const v = parseFloat(String($(id).value).replace(",", "."));
+    if (v > 0 && TECH[k] && !TECH[k].error) OFF[k] = v - TECH[k].price;
+  }
+  store.set("offsets", OFF); calInfo(); render();
+};
+$("calReset").onclick = () => { OFF = { gold: 0, oil: 0 }; store.set("offsets", OFF); calInfo(); render(); };
+calInfo();
+$("soundBtn").onclick = () => { soundOn = !soundOn; $("soundBtn").textContent = soundOn ? "🔔 الصوت مفعّل" : "🔔 تفعيل الصوت"; if (soundOn) beep(); };
+["tf", "slMult", "rr", "sess"].forEach(id => $(id).addEventListener("change", runTech));
+render(); runTech();
+setInterval(runTech, 15000);
+setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30 * 60000) runAI(); }, 60000);
+</script>
+</body>
+</html>
