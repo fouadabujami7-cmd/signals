@@ -25,6 +25,9 @@
   .asset .bar i{display:block;height:100%;background:#fff}
   .asset ul.rs{list-style:none;padding:0;margin:12px 0 4px;text-align:right;font-size:16px;line-height:1.8}
   .asset ul.rs li::before{content:"• "}
+  .opp{border-radius:12px;padding:12px 14px;margin-top:10px}
+  .opp .h{display:flex;justify-content:space-between;font-weight:800;font-size:17px}
+  .opp .r{font-size:14px;margin-top:6px;line-height:1.6}
   .asset .why{font-size:13px;margin-top:8px;opacity:.85}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:14px}
   .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
@@ -92,6 +95,14 @@
         <button id="saveKey" class="sec" style="margin-top:8px">حفظ المفتاح</button>
       </div>
     </details>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:700;font-size:17px">💡 فرص من الأخبار</div>
+    <div class="mut" style="margin:4px 0 10px">الذكاء الاصطناعي يبحث في أخبار اليوم عن فرص واضحة في أي سوق (فضة، دولار، يورو، مؤشرات، نفط…)</div>
+    <button id="oppBtn">🔎 ابحث عن فرص الآن</button>
+    <div class="mut" id="oppStatus" style="margin-top:8px"></div>
+    <div id="opps"></div>
   </div>
 
   <div class="note">
@@ -387,6 +398,59 @@ $("calReset").onclick = () => { OFF = { gold: 0, oil: 0 }; store.set("offsets", 
 calInfo();
 $("soundBtn").onclick = () => { soundOn = !soundOn; $("soundBtn").textContent = soundOn ? "🔔 الصوت مفعّل" : "🔔 تفعيل الصوت"; if (soundOn) beep(); };
 ["slMult", "rr", "thr"].forEach(id => $(id).addEventListener("change", runTech));
+
+// ===== فرص من الأخبار =====
+let OPP = store.get("opps", null), oppBusy = false;
+async function askJSON(prompt, maxUses) {
+  const key = store.get("api_key", "");
+  if (!key) throw new Error("أضف مفتاح Anthropic API من الإعدادات أولاً");
+  let messages = [{ role: "user", content: prompt }];
+  for (let step = 0; step < 4; step++) {
+    const body = JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 2500, messages,
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxUses }] });
+    const { r, j } = await callClaude(key, body);
+    if (!r.ok) throw new Error(j.error?.message || "HTTP " + r.status);
+    if (j.stop_reason === "pause_turn") { messages = [...messages, { role: "assistant", content: j.content }]; continue; }
+    const text = j.content.filter(b => b.type === "text").map(b => b.text).join("");
+    const m = text.match(/\{[\s\S]*\}\s*$/) || text.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("لم يرجع الذكاء الاصطناعي نتيجة مفهومة");
+    return JSON.parse(m[0]);
+  }
+  throw new Error("انتهت المحاولات بدون نتيجة");
+}
+async function runOpp() {
+  if (oppBusy) return; oppBusy = true;
+  $("oppStatus").textContent = "⏳ يبحث في أخبار اليوم عن فرص… (قد يأخذ دقيقة أو اثنتين)";
+  const now = new Date().toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
+  const prompt = `أنت محلل أسواق. الوقت الآن ${now} (توقيت برلين).
+ابحث في الإنترنت عن أهم أخبار الأسواق في آخر 24 ساعة والأحداث القادمة اليوم وغداً (البنوك المركزية، بيانات التضخم والوظائف، الجيوسياسة، أوبك، آراء البنوك الكبرى).
+ثم استخرج من 0 إلى 4 فرص تداول واضحة في أي سوق (عملات مثل الدولار واليورو، الفضة، الذهب، النفط، مؤشرات الأسهم، البيتكوين…) يكون فيها سبب إخباري قوي ومحدد يدعم اتجاهاً واضحاً.
+لا تذكر فرصة ضعيفة أو متضاربة، والأفضل قائمة فارغة من فرصة ضعيفة. لا توجد فرصة مؤكدة 100%، فاذكر أهم خطر لكل فرصة.
+أجب في النهاية بـ JSON فقط بدون أي نص بعده:
+{"opportunities":[{"asset":"اسم الأصل بالعربي","symbol":"الرمز مثل XAGUSD أو EURUSD","direction":"buy|sell","horizon":"المدة المتوقعة مثل: اليوم / 1-3 أيام / هذا الأسبوع","confidence":0-100,"reason":"السبب الإخباري بجملة عربية قصيرة","risk":"أهم خطر بجملة عربية قصيرة"}],"summary":"جملة عربية قصيرة عن مزاج السوق اليوم"}`;
+  try {
+    const data = await askJSON(prompt, 8);
+    OPP = { time: Date.now(), data }; store.set("opps", OPP);
+  } catch (e) {
+    $("oppStatus").textContent = "❌ " + e.message; oppBusy = false; return;
+  }
+  oppBusy = false; renderOpp();
+}
+function renderOpp() {
+  if (!OPP) { $("oppStatus").textContent = "اضغط الزر للبحث عن فرص اليوم."; return; }
+  const m = Math.round((Date.now() - OPP.time) / 60000);
+  const age = m < 60 ? `قبل ${m} دقيقة` : `قبل ${Math.round(m / 60)} ساعة`;
+  const list = (OPP.data.opportunities || []).filter(o => o.direction === "buy" || o.direction === "sell");
+  $("oppStatus").textContent = `آخر بحث ${age}` + (m > 240 ? " (قديم — ابحث من جديد)" : "") + (OPP.data.summary ? " · " + OPP.data.summary : "");
+  $("opps").innerHTML = list.length ? list.map(o => `<div class="opp" style="background:${o.direction === "buy" ? "var(--buy)" : "var(--sell)"}">
+      <div class="h"><span>${o.asset}</span><span style="direction:ltr">${o.symbol || ""}</span></div>
+      <div class="r">📰 ${o.reason}</div>
+      <div class="r">⏱ ${o.horizon || "—"} · الثقة ${o.confidence ?? "—"}%</div>
+      <div class="r">⚠️ ${o.risk || "—"}</div></div>`).join("")
+    : `<div class="mut" style="margin-top:10px">لا توجد فرص واضحة حالياً — الانتظار أفضل.</div>`;
+}
+$("oppBtn").onclick = runOpp;
+renderOpp();
 render(); runTech();
 setInterval(runTech, 10000);
 setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30 * 60000) runAI(); }, 60000);
