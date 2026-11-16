@@ -1,0 +1,29 @@
+name: trading-bot
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: bot
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python bot.py
+        env:
+          CAP_API_KEY: ${{ secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
+          EPICS: "GOLD,OIL_CRUDE"
+          ENTRY_THR: "40"
+          MAX_LOSSES: "5"
+          MAX_HOLD_MIN: "30"
+          SIZE_MULT: "1"
+          LOOP_MINUTES: "14"
+          DRY_RUN: "0"
