@@ -23,6 +23,8 @@
   .asset .lv{font-size:14px;direction:rtl;opacity:.95}
   .asset .bar{height:8px;border-radius:4px;background:rgba(0,0,0,.3);margin:10px auto 0;max-width:260px;overflow:hidden}
   .asset .bar i{display:block;height:100%;background:#fff}
+  .asset ul.rs{list-style:none;padding:0;margin:12px 0 4px;text-align:right;font-size:16px;line-height:1.8}
+  .asset ul.rs li::before{content:"• "}
   .asset .why{font-size:13px;margin-top:8px;opacity:.85}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:14px}
   .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
@@ -94,7 +96,7 @@
 
   <div class="note">
     كيف تُحسب النتيجة: البرنامج يجمع 8 عوامل على شموع الدقيقة (اتجاه 15 دقيقة، المتوسطات، ميلها، RSI، MACD، زخم آخر 5 دقائق، الشمعة الحالية، ورأي الذكاء الاصطناعي من الأخبار والبنوك) في نتيجة واحدة من -100 إلى +100 تتوقع اتجاه السعر خلال الدقائق الخمس القادمة.
-    موجب = <b>شراء</b>، سالب = <b>بيع</b>، وقريب من الصفر فقط (العوامل متعادلة تماماً) = <b>انتظار</b>. «الدقة السابقة» تبيّن كم مرة صدق التوقع فعلاً.
+    <b style="color:#4ade80">الأخضر = شراء</b>، <b style="color:#f87171">الأحمر = بيع</b>، والرمادي = انتظار (العوامل متعادلة). داخل كل مربع أهم أسباب القرار. «الدقة السابقة» تبيّن كم مرة صدق التوقع فعلاً.
     الأسعار من عقود Binance الدائمة (XAUUSDT و CLUSDT) وتختلف بضعة دولارات عن منصتك — استخدم المعايرة 🎯 في الإعدادات مرة يومياً. أداة مساعدة وليست نصيحة مالية.
   </div>
 </div>
@@ -218,6 +220,33 @@ function analyze(key, all, h15all, o) {
 
 function aiFresh() { return AI && Date.now() - AI.time < 90 * 60 * 1000; }
 
+// أهم أسباب القرار بجمل قصيرة
+const REASON = {
+  trend: [ "السعر فوق متوسط الاتجاه (15 دقيقة)", "السعر تحت متوسط الاتجاه (15 دقيقة)" ],
+  cross: [ "المتوسط السريع فوق البطيء", "المتوسط السريع تحت البطيء" ],
+  slope: [ "المتوسطات تتجه للأعلى", "المتوسطات تتجه للأسفل" ],
+  rsi:   [ "RSI قوي ({v})", "RSI ضعيف ({v})" ],
+  macd:  [ "زخم MACD صاعد", "زخم MACD هابط" ],
+  mom:   [ "السعر صعد في آخر 5 دقائق", "السعر نزل في آخر 5 دقائق" ],
+  live:  [ "الشمعة الحالية صاعدة", "الشمعة الحالية هابطة" ],
+};
+function reasons(k, t) {
+  if (!t.fx) return ["بيانات غير كافية"];
+  const items = Object.keys(t.fx).map(x => ({ x, c: t.fx[x] * WEIGHTS[x] }));
+  if (t.aiF != null) items.push({ x: "ai", c: t.aiF * WEIGHTS.ai });
+  const txt = (x, up) => x === "ai" ? "الأخبار: " + (AI.data[k].reason || "") : REASON[x][up ? 0 : 1].replace("{v}", Math.round(t.rsi));
+  if (t.dir === "wait") {
+    const up = items.filter(i => i.c > 0.1).sort((a, b) => b.c - a.c)[0], dn = items.filter(i => i.c < -0.1).sort((a, b) => a.c - b.c)[0];
+    return ["العوامل متعادلة تقريباً", up && "مع الصعود: " + txt(up.x, true), dn && "مع الهبوط: " + txt(dn.x, false)].filter(Boolean);
+  }
+  const sgn = t.dir === "buy" ? 1 : -1;
+  const top = items.filter(i => i.c * sgn > 0.1).sort((a, b) => b.c * sgn - a.c * sgn).slice(0, 3);
+  // الذكاء الاصطناعي يظهر دائماً إن كان موافقاً
+  const ai = items.find(i => i.x === "ai" && i.c * sgn > 0);
+  if (ai && !top.includes(ai)) top[top.length === 3 ? 2 : top.length] = ai;
+  return top.map(i => txt(i.x, sgn > 0));
+}
+
 function render() {
   $("cards").innerHTML = Object.keys(ASSETS).map(k => {
     const t = TECH[k], A = ASSETS[k];
@@ -228,9 +257,9 @@ function render() {
     const lv = t.dir !== "wait" ? `<div class="lv">دخول ${f(t.price + o)} · وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
     return `<div class="asset" style="background:${col}">
       <div class="name"><span>${A.name}${o ? " 🎯" : ""}</span><span>$${f(t.price + o)}</span></div>
-      <div class="word">${W[t.dir]}</div>${lv}
+      <ul class="rs">${reasons(k, t).map(r => `<li>${r}</li>`).join("")}</ul>${lv}
       <div class="bar"><i style="width:${strength}%"></i></div>
-      <div class="why">القوة ${strength}% · ${t.aiF != null ? "مع الذكاء الاصطناعي" : "بدون الذكاء الاصطناعي"}${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div></div>`;
+      <div class="why">القوة ${strength}%${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div></div>`;
   }).join("");
 
   for (const k of Object.keys(ASSETS)) {
@@ -273,6 +302,23 @@ async function runTech() {
   render();
 }
 
+// يجرّب طريقتي إرسال المفتاح (Bearer للمفاتيح الجديدة sk-ant-usr، و x-api-key للقديمة)
+async function callClaude(key, body) {
+  const base = { "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" };
+  const bearer = { ...base, "authorization": "Bearer " + key }, xkey = { ...base, "x-api-key": key };
+  const order = key.startsWith("sk-ant-usr") ? [bearer, xkey] : [xkey, bearer];
+  let lastErr;
+  for (const headers of order) {
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body });
+      const j = await r.json();
+      if (r.status === 401 || r.status === 403) { lastErr = new Error(j.error?.message || "المفتاح مرفوض"); continue; }
+      return { r, j };
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error(lastErr && lastErr.message === "Failed to fetch" ? "تعذّر الاتصال بخادم الذكاء الاصطناعي — تأكد من المفتاح والإنترنت" : (lastErr?.message || "خطأ غير معروف"));
+}
+
 async function runAI() {
   const key = store.get("api_key", "");
   if (!key) { $("aiStatus").textContent = "⚠️ أضف مفتاح Anthropic API من الإعدادات أولاً."; return; }
@@ -294,13 +340,9 @@ async function runAI() {
   try {
     let messages = [{ role: "user", content: prompt }], data = null;
     for (let step = 0; step < 4 && !data; step++) {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 2000, messages,
-          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }] }),
-      });
-      const j = await r.json();
+      const body = JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 2000, messages,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }] });
+      const { r, j } = await callClaude(key, body);
       if (!r.ok) throw new Error(j.error?.message || "HTTP " + r.status);
       if (j.stop_reason === "pause_turn") { messages = [...messages, { role: "assistant", content: j.content }]; continue; }
       const text = j.content.filter(b => b.type === "text").map(b => b.text).join("");
