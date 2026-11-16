@@ -28,6 +28,14 @@
   .opp{border-radius:12px;padding:12px 14px;margin-top:10px}
   .opp .h{display:flex;justify-content:space-between;font-weight:800;font-size:17px}
   .opp .r{font-size:14px;margin-top:6px;line-height:1.6}
+  .asset{background:var(--card)!important;border:1px solid var(--line)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  @media(max-width:520px){.split{grid-template-columns:1fr}}
+  .pane{border-radius:12px;padding:12px;text-align:center}
+  .pane .t{font-size:13px;opacity:.9;font-weight:700}
+  .pane .w{font-size:32px;font-weight:900;margin:4px 0}
+  .pane .r{font-size:14px;line-height:1.6;text-align:right}
+  .agree{margin-top:10px;font-size:14px;font-weight:700}
   .asset .why{font-size:13px;margin-top:8px;opacity:.85}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:14px}
   .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
@@ -106,9 +114,9 @@
   </div>
 
   <div class="note">
-    كيف تُحسب النتيجة: البرنامج يجمع 8 عوامل على شموع الدقيقة (اتجاه 15 دقيقة، المتوسطات، ميلها، RSI، MACD، زخم آخر 5 دقائق، الشمعة الحالية، ورأي الذكاء الاصطناعي من الأخبار والبنوك) في نتيجة واحدة من -100 إلى +100 تتوقع اتجاه السعر خلال الدقائق الخمس القادمة.
-    <b style="color:#4ade80">الأخضر = شراء</b>، <b style="color:#f87171">الأحمر = بيع</b>، والرمادي = انتظار (العوامل متعادلة). داخل كل مربع أهم أسباب القرار. «الدقة السابقة» تبيّن كم مرة صدق التوقع فعلاً.
-    الأسعار من عقود Binance الدائمة (XAUUSDT و CLUSDT) وتختلف بضعة دولارات عن منصتك — استخدم المعايرة 🎯 في الإعدادات مرة يومياً. أداة مساعدة وليست نصيحة مالية.
+    كل سوق فيه قسمان منفصلان: <b>📊 المؤشرات والأرقام</b> (7 مؤشرات فنية على شموع الدقيقة تتوقع اتجاه الدقائق الخمس القادمة) و<b>📰 الأخبار والتحليلات</b> (الذكاء الاصطناعي يقرأ الأخبار وآراء البنوك والأحداث).
+    الأخضر = شراء، الأحمر = بيع، الرمادي = انتظار. عندما يتفق القسمان تكون الإشارة أقوى، وعندما يختلفان الأفضل الانتظار.
+    الأسعار من عقود Binance الدائمة وتختلف بضعة دولارات عن منصتك — استخدم المعايرة 🎯. أداة مساعدة وليست نصيحة مالية.
   </div>
 </div>
 
@@ -218,7 +226,7 @@ function analyze(key, all, h15all, o) {
 
   const n = bars.length - 1, fx = factorsAt(n, X, live);
   if (!fx) return { price: live.c, score: 0, dir: "wait", fx: null, acc: null };
-  const aiF = aiFactor(key), score = scoreOf(fx, aiF);
+  const aiF = aiFactor(key), score = scoreOf(fx, null);   // المؤشرات وحدها، والأخبار منفصلة
   const dir = Math.abs(score) < o.thr ? "wait" : score > 0 ? "buy" : "sell";
   const d = A[n] * o.slMult;
   return {
@@ -244,7 +252,6 @@ const REASON = {
 function reasons(k, t) {
   if (!t.fx) return ["بيانات غير كافية"];
   const items = Object.keys(t.fx).map(x => ({ x, c: t.fx[x] * WEIGHTS[x] }));
-  if (t.aiF != null) items.push({ x: "ai", c: t.aiF * WEIGHTS.ai });
   const txt = (x, up) => x === "ai" ? "الأخبار: " + (AI.data[k].reason || "") : REASON[x][up ? 0 : 1].replace("{v}", Math.round(t.rsi));
   if (t.dir === "wait") {
     const up = items.filter(i => i.c > 0.1).sort((a, b) => b.c - a.c)[0], dn = items.filter(i => i.c < -0.1).sort((a, b) => a.c - b.c)[0];
@@ -252,9 +259,6 @@ function reasons(k, t) {
   }
   const sgn = t.dir === "buy" ? 1 : -1;
   const top = items.filter(i => i.c * sgn > 0.1).sort((a, b) => b.c * sgn - a.c * sgn).slice(0, 3);
-  // الذكاء الاصطناعي يظهر دائماً إن كان موافقاً
-  const ai = items.find(i => i.x === "ai" && i.c * sgn > 0);
-  if (ai && !top.includes(ai)) top[top.length === 3 ? 2 : top.length] = ai;
   return top.map(i => txt(i.x, sgn > 0));
 }
 
@@ -263,14 +267,29 @@ function render() {
     const t = TECH[k], A = ASSETS[k];
     if (!t) return `<div class="asset"><div class="name"><span>${A.name}</span><span>…</span></div><div class="word">…</div></div>`;
     if (t.error) return `<div class="asset"><div class="name"><span>${A.name}</span><span>—</span></div><div class="word" style="font-size:22px">تعذّر جلب السعر</div><div class="why">${t.error}</div></div>`;
-    const o = OFF[k] || 0, col = t.dir === "buy" ? "var(--buy)" : t.dir === "sell" ? "var(--sell)" : "var(--wait)";
+    const o = OFF[k] || 0, C = d => d === "buy" ? "var(--buy)" : d === "sell" ? "var(--sell)" : "var(--wait)";
     const strength = Math.abs(t.score);
-    const lv = t.dir !== "wait" ? `<div class="lv">دخول ${f(t.price + o)} · وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
-    return `<div class="asset" style="background:${col}">
+    const lv = t.dir !== "wait" ? `<div class="lv" style="margin-top:6px">دخول ${f(t.price + o)} · وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
+    // 📰 الأخبار (الذكاء الاصطناعي) — منفصلة تماماً
+    const ad = aiFresh() && AI.data[k] ? AI.data[k] : null;
+    const aiDir = ad && ["buy", "sell", "wait"].includes(ad.bias) ? ad.bias : null;
+    const newsPane = aiDir
+      ? `<div class="pane" style="background:${C(aiDir)}"><div class="t">📰 الأخبار والتحليلات</div><div class="w">${W[aiDir]}</div>
+         <div class="why">الثقة ${ad.confidence ?? "—"}%</div><div class="r">${ad.reason || ""}</div></div>`
+      : `<div class="pane" style="background:var(--wait)"><div class="t">📰 الأخبار والتحليلات</div><div class="w" style="font-size:20px">—</div>
+         <div class="r" style="text-align:center">${AI ? "التحليل قديم — اضغط 🤖 من جديد" : "اضغط 🤖 تحليل الذكاء الاصطناعي"}</div></div>`;
+    const agree = !aiDir || t.dir === "wait" ? "" : aiDir === t.dir
+      ? `<div class="agree" style="color:#4ade80">✅ المؤشرات والأخبار متفقة على ${W[t.dir]}</div>`
+      : `<div class="agree" style="color:#fbbf24">⚠️ المؤشرات والأخبار مختلفة — الأفضل الانتظار</div>`;
+    return `<div class="asset">
       <div class="name"><span>${A.name}${o ? " 🎯" : ""}</span><span>$${f(t.price + o)}</span></div>
-      <ul class="rs">${reasons(k, t).map(r => `<li>${r}</li>`).join("")}</ul>${lv}
-      <div class="bar"><i style="width:${strength}%"></i></div>
-      <div class="why">القوة ${strength}%${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div></div>`;
+      <div class="split">
+        <div class="pane" style="background:${C(t.dir)}"><div class="t">📊 المؤشرات والأرقام</div><div class="w">${W[t.dir]}</div>
+          <div class="bar"><i style="width:${strength}%"></i></div>
+          <div class="why">القوة ${strength}%${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div>
+          <ul class="rs" style="font-size:14px;margin-top:8px">${reasons(k, t).map(r => `<li>${r}</li>`).join("")}</ul>${lv}</div>
+        ${newsPane}
+      </div>${agree}</div>`;
   }).join("");
 
   for (const k of Object.keys(ASSETS)) {
@@ -283,9 +302,9 @@ function render() {
   const arrow = v => v > 0.15 ? `<span class="ok">⬆ ${Math.round(v * 100)}</span>` : v < -0.15 ? `<span class="no">⬇ ${Math.round(v * 100)}</span>` : `<span class="mut">↔ ${Math.round(v * 100)}</span>`;
   $("details").innerHTML = "<table>" + Object.keys(ASSETS).map(k => {
     const t = TECH[k]; if (!t || t.error || !t.fx) return "";
-    return `<tr><td colspan="2" style="color:var(--gold);font-weight:700;padding-top:12px">${ASSETS[k].name} <span class="mut">(${t.sym}) · النتيجة ${t.score > 0 ? "+" : ""}${t.score}</span></td></tr>` +
+    return `<tr><td colspan="2" style="color:var(--gold);font-weight:700;padding-top:12px">${ASSETS[k].name} <span class="mut">(${t.sym}) · نتيجة المؤشرات ${t.score > 0 ? "+" : ""}${t.score}</span></td></tr>` +
       Object.keys(t.fx).map(x => `<tr><td>${name[x]}</td><td>${arrow(t.fx[x])}</td></tr>`).join("") +
-      `<tr><td>الذكاء الاصطناعي</td><td>${t.aiF == null ? '<span class="mut">غير مفعّل</span>' : arrow(t.aiF)}</td></tr>` +
+
       `<tr><td>دقة التوقع (آخر 16 ساعة)</td><td>${t.acc ? t.acc.pct + "% من " + t.acc.n + " توقع" : "—"}</td></tr>`;
   }).join("") + "</table>";
 
