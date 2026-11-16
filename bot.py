@@ -46,7 +46,7 @@ class Capital:
         self.cst = self.token = None
 
     def _req(self, method, path, body=None, auth=True):
-        headers = {"Content-Type": "application/json", "X-CAP-API-KEY": API_KEY}
+        headers = {"Content-Type": "application/json", "X-CAP-API-KEY": API_KEY.strip()}
         if auth:
             headers.update({"CST": self.cst or "", "X-SECURITY-TOKEN": self.token or ""})
         data = json.dumps(body).encode() if body is not None else None
@@ -56,8 +56,14 @@ class Capital:
             return r.headers, json.loads(raw)
 
     def login(self):
-        h, _ = self._req("POST", "/session",
-                         {"identifier": IDENTIFIER, "password": PASSWORD, "encryptedPassword": False}, auth=False)
+        try:
+            h, _ = self._req("POST", "/session",
+                             {"identifier": IDENTIFIER.strip(), "password": PASSWORD.strip(), "encryptedPassword": False}, auth=False)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:300]
+            log(f"❌ فشل تسجيل الدخول: HTTP {e.code} {body}")
+            log("تأكد: المفتاح فعّال في Capital.com، الإيميل صحيح، وكلمة السر هي كلمة سر الـ API (وليست كلمة سر الحساب)")
+            raise SystemExit(1)
         self.cst, self.token = h.get("CST"), h.get("X-SECURITY-TOKEN")
         if not self.cst:
             raise RuntimeError("فشل تسجيل الدخول")
