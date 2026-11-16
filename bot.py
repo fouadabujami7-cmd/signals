@@ -467,6 +467,26 @@ def cycle(cap, state):
             log(f"{epic}: خطأ في فتح الصفقة", e)
 
 
+def discover(cap):
+    """مرة واحدة: يعرض كل أدوات الذهب والنفط المتاحة في حسابك (لنعرف هل منتجات KO متاحة عبر الـ API)"""
+    for term in ("gold", "oil", "knock"):
+        try:
+            ms = cap.call("GET", "/markets?" + urllib.parse.urlencode({"searchTerm": term})).get("markets", [])
+            log(f"🔎 بحث '{term}': {len(ms)} نتيجة")
+            for m in ms[:25]:
+                log(f"   {m.get('epic')} | {m.get('instrumentName')} | {m.get('instrumentType')} | {m.get('marketStatus')}")
+        except Exception as e:
+            log(f"🔎 بحث '{term}' فشل:", e)
+    for epic in EPICS:
+        try:
+            m = cap.call("GET", f"/markets/{epic}")
+            inst, rules = m.get("instrument", {}), m.get("dealingRules", {})
+            log(f"🔎 {epic}: type={inst.get('type')} lot={inst.get('lotSize')} margin={inst.get('marginFactor')}"
+                f"{inst.get('marginFactorUnit', '')} minSize={rules.get('minDealSize')} guaranteed={inst.get('guaranteedStopAllowed')}")
+        except Exception as e:
+            log(f"🔎 {epic} فشل:", e)
+
+
 def main():
     if not (API_KEY and IDENTIFIER and PASSWORD):
         raise SystemExit("أضف CAP_API_KEY و CAP_IDENTIFIER و CAP_PASSWORD في GitHub Secrets")
@@ -476,6 +496,10 @@ def main():
         f"({MAX_PER_EPIC} لكل سوق) | مرتدات {'نعم' if REBOUND else 'لا'} | أسواق {', '.join(EPICS)}")
     cap, state = Capital(), load_state()
     cap.login()
+    if not state.get("discovered"):
+        discover(cap)
+        state["discovered"] = True
+        save_state(state)
     end = time.time() + LOOP_MINUTES * 60
     while True:
         try:
