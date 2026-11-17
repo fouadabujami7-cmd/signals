@@ -64,7 +64,7 @@ jobs:
           AI_MIN_GAP_MIN: "30"
           # ===== الاستراتيجية =====
           EPICS: "GOLD,OIL_CRUDE"
-          SIZE_RANGES: "GOLD:1-10,OIL_CRUDE:50-200"
+          SIZE_RANGES: "GOLD:0.01-10,OIL_CRUDE:1-200"
           ENTRY_THR: "45"
           REBOUND: "1"
           REB_MOVE_ATR: "3"
