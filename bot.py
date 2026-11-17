@@ -31,11 +31,15 @@ MAX_OPEN=0 ومعه حد الخسارة اليومي 0 = بلا حدود. على
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 E = os.environ.get
@@ -82,14 +86,24 @@ NEWS_HOURS = float(E("NEWS_HOURS", "12"))                     # عمر العن�
 NEWS_TTL_MIN = float(E("NEWS_TTL_MIN", "30"))                 # كم يُحفظ تحليل أخبار سوق قبل إعادة الجلب
 SENT_WEIGHT = float(E("SENT_WEIGHT", "0.3"))                  # وزن ميول المتداولين (0 = تجاهله)
 SENT_EDGE = float(E("SENT_EDGE", "15"))                       # لا يُعتبر الميل إلا إذا ابتعدت نسبة الشراء عن 50% بهذا المقدار
+GH_TOKEN, GH_REPO = E("GITHUB_TOKEN", "").strip(), E("GITHUB_REPOSITORY", "").strip()
+PUBLISH_ON = E("PUBLISH", "1") == "1"                          # نشر لوحة التطبيق (bot.json) لفرع bot-data
+PUBLISH_BRANCH = E("PUBLISH_BRANCH", "bot-data")
+PUBLISH_REMOTE = E("PUBLISH_REMOTE", "")                       # للاختبار المحلي فقط
+NAMES_AR = {"GOLD": "الذهب", "OIL_CRUDE": "النفط الخام"}
 CTX_VETO = float(E("CTX_VETO", "0.25"))                       # الأخبار/الميول تمنع الصفقة فقط إذا عاكستها بهذه القوة
 STATE_FILE = "state.json"
 BERLIN = ZoneInfo("Europe/Berlin")
 WEIGHTS = {"trend": 2, "cross": 1.5, "slope": 1, "rsi": 1, "macd": 1, "mom": 1.5, "live": 0.5}
 
 
+LOG_BUF = deque(maxlen=80)
+
+
 def log(*a):
-    print(datetime.now(BERLIN).strftime("%H:%M:%S"), *a, flush=True)
+    ts = datetime.now(BERLIN).strftime("%H:%M:%S")
+    LOG_BUF.append(ts + " " + " ".join(str(x) for x in a))
+    print(ts, *a, flush=True)
 
 
 # ===== HTTP =====
@@ -487,6 +501,8 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
             log(f"{epic}: أصغر حجم ({min_size}) خطره أكبر من {RISK_PCT}% — تخطي"); return
         size = min_size
     size = max(size, min_size)
+    if min_size * dist * lot > risk_money * 1.5:
+        log(f"{epic}: أصغر حجم ({min_size}) خطره {min_size * dist * lot:.2f} أكبر من حد المخاطرة ({risk_money:.2f}) — تخطي"); return
     if cap_size is not None and size > cap_size:
         log(f"{epic}: أصغر حجم ({min_size}) يتجاوز سقف الهامش {MAX_MARGIN_PCT:.0f}% من الرصيد — تخطي"); return
     dec = int(snap.get("decimalPlacesFactor") or (3 if price < 10 else 2))
@@ -514,7 +530,7 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
             log(f"{epic}: {c.get('dealStatus')} {c.get('reason', '')} {'(وقف مضمون)' if g else ''}")
             if c.get("dealStatus") == "ACCEPTED":
                 ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
-                return {"loss": loss, "ids": list(dict.fromkeys(i for i in ids if i))}
+                return {"loss": loss, "ids": list(dict.fromkeys(i for i in ids if i)), "size": size, "price": price, "stop": stop, "target": target}
         except Exception as e:
             log(f"{epic}: رفض {'بوقف مضمون' if g else ''}: {e}")
 
@@ -542,6 +558,8 @@ def secure(cap, p):
         spread = abs(float(mk["offer"]) - float(mk["bid"]))
         new_stop = round(lvl + spread if buy else lvl - spread, 5)
         log(f"{mk['epic']}: 🔒 تأمين الصفقة — نقل الوقف إلى {new_stop} (ربح حالي {gain:.2f})")
+        event(type="secure", epic=mk["epic"], name=mk.get("instrumentName") or disp_name({}, mk["epic"]), dir=pos["direction"],
+              price=new_stop, why=f"نقل الوقف لسعر الدخول (ربح حالي {gain:.2f})")
         if not DRY_RUN:
             body = {"stopLevel": new_stop}
             if pos.get("profitLevel") is not None:
@@ -645,14 +663,126 @@ def scan_stocks(cap, universe):
     return [e for _, e in rows[:STOCK_TOP]]
 
 
+# ===== لوحة التطبيق: تسجيل العمليات ونشرها (فرع bot-data، لقطة وحيدة بلا تاريخ) =====
+_STATE = {}
+_PUB_ERR = [False]
+
+
+def event(**kw):
+    """يسجّل عملية (فتح/إغلاق/تأمين) ضمن state ليعرضها التطبيق"""
+    ev = {"t": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **kw}
+    _STATE["events"] = (_STATE.get("events", []) + [ev])[-200:]
+
+
+def disp_name(names, epic):
+    return NAMES_AR.get(epic) or (names or {}).get(epic) or epic
+
+
+def open_view(p, names):
+    pos, mk = p["position"], p["market"]
+    buy = pos["direction"] == "BUY"
+    try:
+        now = float(mk["bid"] if buy else mk["offer"])
+    except Exception:
+        now = None
+    return {"epic": mk["epic"], "name": mk.get("instrumentName") or disp_name(names, mk["epic"]), "dir": pos["direction"],
+            "size": pos.get("size"), "entry": pos.get("level"), "stop": pos.get("stopLevel"), "target": pos.get("profitLevel"),
+            "now": now, "upl": pos.get("upl"), "secured": pos_risk(p) == 0, "opened": pos.get("createdDateUTC")}
+
+
+def mkt(state, names, epic, t, a, d, final, why, r=None):
+    nv = (state.get("news") or {}).get(epic) or {}
+    sl = ((state.get("sent") or {}).get(epic) or {}).get("long")
+    return {"epic": epic, "name": disp_name(names, epic), "price": round(t["price"], 4), "tech": t["score"], "final": final,
+            "verdict": d, "why": why, "rebound": r["why"] if r else None,
+            "ctx": ({"bias": a.get("bias"), "conf": a.get("confidence"), "reason": a.get("reason")} if a else None),
+            "news": nv.get("top") or [], "news_score": nv.get("score"), "news_n": nv.get("n"), "long": sl}
+
+
+def history_rows(cap, state):
+    h = state.get("hist") or {}
+    if time.time() - h.get("t", 0) < 300:
+        return h.get("rows", [])
+    rows = h.get("rows", [])
+    try:
+        now = datetime.now(timezone.utc)
+        q = urllib.parse.urlencode({"from": (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "to": now.strftime("%Y-%m-%dT%H:%M:%S"), "type": "TRADE"})
+        rows = [{"t": x.get("dateUtc") or x.get("date"), "name": x.get("instrumentName"), "pnl": float(x.get("size") or 0),
+                 "note": x.get("note")} for x in cap.call("GET", "/history/transactions?" + q).get("transactions", [])]
+        rows.sort(key=lambda r: r["t"] or "", reverse=True)
+        rows = rows[:60]
+    except Exception as e:
+        log("⚠️ تعذّر قراءة سجل المعاملات:", e)
+    state["hist"] = {"t": time.time(), "rows": rows}
+    return rows
+
+
+def _scrub(s):
+    return s.replace(GH_TOKEN, "***") if GH_TOKEN else s
+
+
+def publish(state, view):
+    """يكتب bot.json ويرفعه (force-push) لفرع bot-data. التطبيق يقرأه من هناك. لا يؤثر على الفرع الرئيسي ولا يترك تاريخاً."""
+    if not PUBLISH_ON:
+        return
+    remote = PUBLISH_REMOTE or (f"https://x-access-token:{GH_TOKEN}@github.com/{GH_REPO}.git" if GH_TOKEN and GH_REPO else "")
+    if not remote:
+        if not _PUB_ERR[0]:
+            log("ℹ️ نشر اللوحة معطّل (لا GITHUB_TOKEN/GITHUB_REPOSITORY)")
+            _PUB_ERR[0] = True
+        return
+    mk = sorted(view.get("markets", []), key=lambda m: -abs(m.get("final") or 0))[:30]
+    data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "live" if LIVE else "demo",
+            "dry_run": DRY_RUN,
+            "settings": {"max_open": MAX_OPEN, "daily_limit_eur": MAX_DAILY_LOSS_EUR, "daily_limit_pct": MAX_DAILY_LOSS_PCT,
+                         "risk_pct": RISK_PCT, "trade_risk_eur": TRADE_RISK_EUR, "stocks": STOCKS, "ai": USE_AI,
+                         "markets": EPICS, "max_new": MAX_NEW_PER_CYCLE},
+            **{k: v for k, v in view.items() if k != "markets"}, "markets": mk,
+            "events": state.get("events", [])[-120:][::-1], "log": list(LOG_BUF)}
+    tmp = tempfile.mkdtemp(prefix="pub_")
+    try:
+        with open(os.path.join(tmp, "bot.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        for args in (["init", "-q"], ["checkout", "-q", "-b", PUBLISH_BRANCH], ["add", "bot.json"], ["commit", "-q", "-m", "bot data"],
+                     ["push", "-q", "--force", remote, f"HEAD:refs/heads/{PUBLISH_BRANCH}"]):
+            r = subprocess.run(["git", "-c", "user.name=bot", "-c", "user.email=bot@users.noreply.github.com", *args],
+                               cwd=tmp, env=env, capture_output=True, text=True, timeout=40)
+            if r.returncode:
+                raise RuntimeError(_scrub((r.stderr or r.stdout or "")[:300]))
+        _PUB_ERR[0] = False
+    except Exception as e:
+        if not _PUB_ERR[0]:
+            log("⚠️ تعذّر نشر اللوحة:", _scrub(str(e))[:300])
+            _PUB_ERR[0] = True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def cycle(cap, state):
+    global _STATE
+    _STATE = state
+    view = {"balance": None, "open": [], "markets": [], "scan": {}}
+    try:
+        _cycle(cap, state, view)
+    finally:
+        try:
+            view["history"] = history_rows(cap, state)
+            publish(state, view)
+        except Exception as e:
+            log("⚠️ نشر:", e)
+
+
+def _cycle(cap, state, view):
     bal, cur = balance(cap)
     today = day_pnl(state, bal)
+    view.update(balance=round(bal, 2), currency=cur, day_pnl=round(today, 2), day_start=round(state.get("start_bal", bal), 2))
     allpos = cap.call("GET", "/positions").get("positions", [])
     ours, ours_ep = set(state.get("ours", [])), set(state.get("ours_epics", []))
     # الروبوت يدير فقط: صفقات أسواقه (EPICS) وصفقات الأسهم التي فتحها هو. لا يلمس صفقاتك اليدوية.
-    positions = [p for p in allpos if p["market"]["epic"] in EPICS or p["market"]["epic"] in ours_ep
-                 or p["position"]["dealId"] in ours]
+    positions = [p for p in allpos if p["market"]["epic"] in ours_ep or p["position"]["dealId"] in ours]
+    foreign_eps = {p["market"]["epic"] for p in allpos} - {p["market"]["epic"] for p in positions}
     if len(allpos) > len(positions):
         log(f"(تجاهل {len(allpos) - len(positions)} صفقة ليست من الروبوت)")
     live_ids = {p["position"]["dealId"] for p in allpos}
@@ -666,6 +796,8 @@ def cycle(cap, state):
         age = (datetime.now(timezone.utc) - opened).total_seconds() / 60
         if MAX_HOLD_MIN > 0 and age > MAX_HOLD_MIN:
             log(f"{p['market']['epic']}: إغلاق بعد {age:.0f} دقيقة (النتيجة {pos.get('upl')})")
+            event(type="close", epic=p["market"]["epic"], name=p["market"].get("instrumentName") or p["market"]["epic"],
+                  dir=pos["direction"], size=pos.get("size"), price=pos.get("level"), why=f"إغلاق بعد {age:.0f} دقيقة (MAX_HOLD_MIN)")
             if not DRY_RUN:
                 cap.call("DELETE", f"/positions/{pos['dealId']}")
             continue
@@ -673,6 +805,17 @@ def cycle(cap, state):
             secure(cap, p)
         except Exception as e:
             log(f"{p['market']['epic']}: تعذّر التأمين", e)
+    names_all = (state.get("universe") or {}).get("epics", {})
+    view["open"] = [open_view(p, names_all) for p in positions]
+    now_ids = {p["position"]["dealId"] for p in positions}
+    for did, pv in (state.get("prev_open") or {}).items():
+        if did not in now_ids:
+            event(type="close", epic=pv["epic"], name=pv["name"], dir=pv["dir"], size=pv["size"], price=pv["entry"],
+                  why="انتهت الصفقة (هدف أو وقف أو إغلاق يدوي) — النتيجة في سجل المعاملات")
+    state["prev_open"] = {p["position"]["dealId"]: {"epic": p["market"]["epic"], "dir": p["position"]["direction"],
+                                                    "name": p["market"].get("instrumentName") or disp_name(names_all, p["market"]["epic"]),
+                                                    "size": p["position"].get("size"), "entry": p["position"].get("level")}
+                          for p in positions}
     # حد الخسارة اليومي (اختياري): خسارة اليوم + خطر الصفقات المفتوحة لا يتجاوزه. إذا كان كله 0 فلا حد.
     cap_open = MAX_OPEN if MAX_OPEN > 0 else 10 ** 9
     if MAX_DAILY_LOSS_EUR > 0:
@@ -700,12 +843,16 @@ def cycle(cap, state):
             stocks = scan_stocks(cap, names)
         except Exception as e:
             log("⚠️ تعذّر مسح الأسهم:", e)
+    view["scan"] = {"universe": len(names), "analyzed": len(stocks), "stocks_on": STOCKS}
     ai = ai_view(state, EPICS + stocks, names) if USE_AI else {}
     candidates = []
     for epic in EPICS + stocks:
         mine = by_epic.get(epic, [])
         max_here = MAX_PER_EPIC if epic in EPICS else 1
         if len(mine) >= max_here or any(pos_risk(p) > 0 for p in mine):
+            continue
+        if epic in foreign_eps:                     # عندك صفقة يدوية في هذا السوق: لا نفتح فيه ولا نلمسها
+            log(f"{epic}: عندك صفقة يدوية فيه — تخطي")
             continue
         label = epic if epic in EPICS or not names.get(epic) else f"{epic} ({names[epic]})"
         try:
@@ -719,23 +866,28 @@ def cycle(cap, state):
             r = t.get("rebound")
             if r and not (a and a.get("bias") == "wait"):
                 log(f"{label}: ⚡ {r['why']} → ✅ {r['dir']}")
+                view["markets"].append(mkt(state, names, epic, t, a, r["dir"], 101, r["why"], r))
                 candidates.append((101, epic, r["dir"], t, r["why"], r))
                 continue
             d, final, why = decide(t, a)
             log(f"{label}: فني {t['score']:+d}" + (f" | {'AI' if USE_AI else 'سياق'} {a.get('bias')} {a.get('confidence')}% {('(' + a['reason'] + ')') if a.get('reason') and not USE_AI else ''}" if a else "")
                 + f" → {final:+d} {('✅ ' + d) if d else why}" + (f" | صفقات مؤمّنة {len(mine)}" if mine else ""))
+            view["markets"].append(mkt(state, names, epic, t, a, d, final, why))
             if d:
                 candidates.append((abs(final), epic, d, t, (a or {}).get("reason", ""), None))
         except Exception as e:
             log(f"{label}: خطأ", e)
     slots = max(0, min(MAX_NEW_PER_CYCLE, cap_open - len(positions)))
-    for _, epic, d, t, reason, lv in sorted(candidates, key=lambda x: -x[0])[:slots]:
+    for sc, epic, d, t, reason, lv in sorted(candidates, key=lambda x: -x[0])[:slots]:
         if budget <= 0:
             break
         try:
             res = open_trade(cap, epic, d, t, bal, reason, budget, lv)
             if res:
                 budget -= res["loss"]
+                event(type="open", epic=epic, name=disp_name(names, epic), dir=d, size=res["size"], price=res["price"],
+                      stop=res["stop"], target=res["target"], risk=round(res["loss"], 2), kind="مرتدة" if lv else "إشارة",
+                      score=sc, why=reason, news=(state.get("news", {}).get(epic, {}).get("top") or []))
                 if epic not in EPICS:
                     state.setdefault("ours_epics", []).append(epic)
                 state.setdefault("ours", []).extend(res["ids"])
