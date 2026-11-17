@@ -65,6 +65,12 @@ ENTRY_THR = float(E("ENTRY_THR", "45"))
 MAX_HOLD_MIN = float(E("MAX_HOLD_MIN", "0"))   # 0 = لا إغلاق بالوقت، فقط عند الهدف أو الوقف
 SL_MULT = float(E("SL_MULT", "2"))
 RR = float(E("RR", "1.5"))
+# ===== فلتر الجودة (الصفقات الأسرع والأوضح فقط) =====
+MIN_TRADE_EUR = float(E("MIN_TRADE_EUR", "0"))     # أدنى قيمة للصفقة (الحجم × السعر). 0 = بلا حد
+MIN_ATR_PCT = float(E("MIN_ATR_PCT", "0"))         # أدنى تذبذب بالدقيقة (% من السعر) للأسهم: سهم بطيء = لا صفقة
+MIN_AGREE = int(E("MIN_AGREE", "0"))               # كم مؤشراً (من 7) لازم يتفقوا مع الاتجاه
+REQUIRE_CTX = E("REQUIRE_CTX", "0") == "1"         # الأخبار/الميول لازم تؤكد الاتجاه (لا تكفي الإشارة الفنية وحدها)
+MIN_CTX_CONF = float(E("MIN_CTX_CONF", "0"))       # أدنى قوة (%) لتأكيد الأخبار/الميول
 GUARANTEED = E("GUARANTEED_STOP", "1") == "1"
 AI_EVERY_MIN = float(E("AI_EVERY_MIN", "60"))
 LOOP_MINUTES = float(E("LOOP_MINUTES", "14"))
@@ -202,7 +208,7 @@ def tech(cap, epic):
           "slope": clip((eF[n] - eF[n - 3]) / a), "rsi": clip((R[n] - 50) / 20), "macd": clip(hist[n] / (0.3 * a)),
           "mom": clip((c[n] - c[n - 5]) / (1.5 * a)), "live": clip((live["c"] - live["o"]) / a)}
     out = {"score": round(sum(fx[k] * WEIGHTS[k] for k in fx) / sum(WEIGHTS.values()) * 100), "atr": a,
-           "price": live["c"], "rebound": None}
+           "price": live["c"], "rebound": None, "fx": fx, "atr_pct": a / live["c"] * 100 if live["c"] else 0}
     if REBOUND:
         out["rebound"] = rebound(b, R, a)
     return out
@@ -465,6 +471,16 @@ def decide(t, ai):
         final, thr = t["score"], ENTRY_THR + 10    # بدون سياق (أخبار/ميول): نطلب قوة فنية أعلى
     if abs(final) < thr:
         return None, final, "القوة غير كافية"
+    sgn = 1 if final > 0 else -1
+    if REQUIRE_CTX:
+        a_ok = bool(ai) and ai.get("bias") in ("buy", "sell") and \
+            {"buy": 1, "sell": -1}[ai["bias"]] == sgn and float(ai.get("confidence", 0)) >= MIN_CTX_CONF
+        if not a_ok:
+            return None, final, "الأخبار/الميول لا تؤكد الاتجاه"
+    if MIN_AGREE and t.get("fx"):
+        agree = sum(1 for v in t["fx"].values() if v * sgn > 0.1)
+        if agree < MIN_AGREE:
+            return None, final, f"المؤشرات غير متفقة ({agree}/{len(t['fx'])})"
     return ("BUY" if final > 0 else "SELL"), final, ""
 
 
@@ -501,6 +517,10 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
             log(f"{epic}: أصغر حجم ({min_size}) خطره أكبر من {RISK_PCT}% — تخطي"); return
         size = min_size
     size = max(size, min_size)
+    if MIN_TRADE_EUR and size * price * lot < MIN_TRADE_EUR:      # أدنى قيمة للصفقة
+        size = max(size, step_round(MIN_TRADE_EUR / (price * lot) + step * 0.999, step))
+    if size * dist * lot > risk_money * 1.5:
+        log(f"{epic}: حجم {size} (قيمة {size * price * lot:.0f}) خطره {size * dist * lot:.2f} أكبر من حد المخاطرة ({risk_money:.2f}) — تخطي"); return
     if min_size * dist * lot > risk_money * 1.5:
         log(f"{epic}: أصغر حجم ({min_size}) خطره {min_size * dist * lot:.2f} أكبر من حد المخاطرة ({risk_money:.2f}) — تخطي"); return
     if cap_size is not None and size > cap_size:
@@ -860,10 +880,17 @@ def _cycle(cap, state, view):
             time.sleep(0.15)
             if not t:
                 continue
+            if epic not in EPICS and MIN_ATR_PCT and t.get("atr_pct", 0) < MIN_ATR_PCT:
+                log(f"{label}: بطيء (تذبذب الدقيقة {t.get('atr_pct', 0):.3f}% < {MIN_ATR_PCT}%) — تخطي")
+                continue
             a = ai_fresh(ai.get(epic)) if USE_AI else None
             if not USE_AI and (abs(t["score"]) >= 0.6 * ENTRY_THR or t.get("rebound")):
                 a = market_ctx(cap, state, epic, names.get(epic, ""))   # أخبار + ميول المتداولين فقط للمرشّحين
             r = t.get("rebound")
+            if r and REQUIRE_CTX and not (a and a.get("bias") in ("buy", "sell") and a["bias"].upper() == r["dir"]
+                                          and float(a.get("confidence", 0)) >= MIN_CTX_CONF):
+                log(f"{label}: ⚡ مرتدة {r['dir']} لكن الأخبار/الميول لا تؤكدها — تخطي")
+                r = None
             if r and not (a and a.get("bias") == "wait"):
                 log(f"{label}: ⚡ {r['why']} → ✅ {r['dir']}")
                 view["markets"].append(mkt(state, names, epic, t, a, r["dir"], 101, r["why"], r))
