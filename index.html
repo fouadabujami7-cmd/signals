@@ -71,10 +71,18 @@
   .chk{font-size:11px;margin-top:4px;opacity:.95}
   .pnl{font-size:15px;font-weight:800;margin-top:4px;direction:ltr}
   .hist td{font-size:12px;padding:4px 3px}
+  /* ===== تبويبات: الإشارات | البوت ===== */
+  .tabs{position:sticky;top:0;z-index:50;display:flex;gap:6px;padding:8px 10px;background:var(--bg);border-bottom:1px solid var(--line)}
+  .tabs button{flex:1;background:#2a2f3a;color:var(--txt);padding:10px 8px;font-size:14px}
+  .tabs button.on{background:var(--gold);color:#111}
+  #botView{display:none}
+  #botView iframe{display:block;width:100%;height:calc(100vh - 56px);height:calc(100dvh - 56px);border:0;background:var(--bg)}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="tabs"><button id="tabSig" class="on">📈 الإشارات</button><button id="tabBot">🤖 البوت</button></div>
+<div id="botView"><iframe id="botFrame" title="لوحة البوت"></iframe></div>
+<div class="wrap" id="sigView">
   <h1>إشارات الذهب والنفط</h1>
   <div class="mut" id="updated">جاري التحميل…</div>
 
@@ -509,6 +517,19 @@ renderOpp();
 render(); runTech();
 setInterval(runTech, 20000);
 setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30 * 60000) runAI(); }, 60000);
+
+// ===== التبديل بين الإشارات ولوحة البوت =====
+function showTab(t) {
+  const bot = t === "bot";
+  $("sigView").style.display = bot ? "none" : "";
+  $("botView").style.display = bot ? "block" : "none";
+  $("tabSig").classList.toggle("on", !bot); $("tabBot").classList.toggle("on", bot);
+  if (bot && !$("botFrame").getAttribute("src")) $("botFrame").setAttribute("src", "bot.html");
+  store.set("tab", t);
+}
+$("tabSig").onclick = () => showTab("sig");
+$("tabBot").onclick = () => showTab("bot");
+showTab(store.get("tab", "sig") === "bot" ? "bot" : "sig");
 </script>
 </body>
 </html>
