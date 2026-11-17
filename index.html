@@ -51,6 +51,23 @@
   td{padding:5px 4px;border-bottom:1px solid var(--line)}
   .ok{color:#4ade80}.no{color:#f87171}
   .note{font-size:12px;color:var(--mut);line-height:1.6;margin-top:14px}
+  /* ===== عرض مضغوط: الأربع مربعات في شاشة واحدة ===== */
+  .wrap{padding:10px}
+  .asset{padding:10px!important;margin-top:8px!important}
+  .asset .name{font-size:15px}
+  .asset .name span:last-child{font-size:16px}
+  .split{grid-template-columns:1fr 1fr!important;gap:6px!important;margin-top:6px!important}
+  .pane{padding:8px 6px!important;border-radius:10px!important}
+  .pane .t{font-size:11px!important}
+  .pane .w{font-size:22px!important;margin:2px 0!important}
+  .pane .r{font-size:11.5px!important;line-height:1.45!important;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer}
+  .pane .r.open{-webkit-line-clamp:unset}
+  .asset .bar{height:5px!important;margin-top:4px!important}
+  .asset .why{font-size:11px!important;margin-top:3px!important}
+  .asset ul.rs{font-size:11.5px!important;margin:5px 0 0!important;line-height:1.45!important}
+  .asset .lv{font-size:11px!important;margin-top:4px}
+  .agree{font-size:12px!important;margin-top:6px!important}
+  h1{font-size:16px}
 </style>
 </head>
 <body>
@@ -193,7 +210,7 @@ function factorsAt(i, X, liveBar) {
 }
 function scoreOf(fx, aiF) {
   let s = 0, w = 0;
-  for (const k in fx) { s += fx[k] * WEIGHTS[k]; w += WEIGHTS[k]; }
+  for (const k in fx) { if (k === "live") continue; s += fx[k] * WEIGHTS[k]; w += WEIGHTS[k]; }
   if (aiF != null) { s += aiF * WEIGHTS.ai; w += WEIGHTS.ai; }
   return Math.round(s / w * 100);
 }
@@ -224,7 +241,8 @@ function analyze(key, all, h15all, o) {
     tot++; if (Math.sign(move) === Math.sign(s)) hit++;
   }
 
-  const n = bars.length - 1, fx = factorsAt(n, X, live);
+  const n = bars.length - 1, fx = factorsAt(n, X, null);   // شموع مغلقة فقط → لا تذبذب كل 10 ثوانٍ
+  if (fx) delete fx.live;
   if (!fx) return { price: live.c, score: 0, dir: "wait", fx: null, acc: null };
   const aiF = aiFactor(key), score = scoreOf(fx, null);   // المؤشرات وحدها، والأخبار منفصلة
   const dir = Math.abs(score) < o.thr ? "wait" : score > 0 ? "buy" : "sell";
@@ -269,13 +287,14 @@ function render() {
     if (t.error) return `<div class="asset"><div class="name"><span>${A.name}</span><span>—</span></div><div class="word" style="font-size:22px">تعذّر جلب السعر</div><div class="why">${t.error}</div></div>`;
     const o = OFF[k] || 0, C = d => d === "buy" ? "var(--buy)" : d === "sell" ? "var(--sell)" : "var(--wait)";
     const strength = Math.abs(t.score);
-    const lv = t.dir !== "wait" ? `<div class="lv" style="margin-top:6px">دخول ${f(t.price + o)} · وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
+    const lockTxt = t.locked ? ` · 🔒 حتى ${new Date(t.locked).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}` : "";
+    const lv = t.dir !== "wait" ? `<div class="lv">دخول ${f((t.entry ?? t.price) + o)}<br>وقف ${f(t.sl + o)} · هدف ${f(t.tp + o)}</div>` : "";
     // 📰 الأخبار (الذكاء الاصطناعي) — منفصلة تماماً
     const ad = aiFresh() && AI.data[k] ? AI.data[k] : null;
     const aiDir = ad && ["buy", "sell", "wait"].includes(ad.bias) ? ad.bias : null;
     const newsPane = aiDir
       ? `<div class="pane" style="background:${C(aiDir)}"><div class="t">📰 الأخبار والتحليلات</div><div class="w">${W[aiDir]}</div>
-         <div class="why">الثقة ${ad.confidence ?? "—"}%</div><div class="r">${ad.reason || ""}</div></div>`
+         <div class="why">الثقة ${ad.confidence ?? "—"}%</div><div class="r" onclick="this.classList.toggle('open')">${ad.reason || ""}</div></div>`
       : `<div class="pane" style="background:var(--wait)"><div class="t">📰 الأخبار والتحليلات</div><div class="w" style="font-size:20px">—</div>
          <div class="r" style="text-align:center">${AI ? "التحليل قديم — اضغط 🤖 من جديد" : "اضغط 🤖 تحليل الذكاء الاصطناعي"}</div></div>`;
     const agree = !aiDir || t.dir === "wait" ? "" : aiDir === t.dir
@@ -286,8 +305,8 @@ function render() {
       <div class="split">
         <div class="pane" style="background:${C(t.dir)}"><div class="t">📊 المؤشرات والأرقام</div><div class="w">${W[t.dir]}</div>
           <div class="bar"><i style="width:${strength}%"></i></div>
-          <div class="why">القوة ${strength}%${t.acc ? ` · دقة سابقة ${t.acc.pct}%` : ""}</div>
-          <ul class="rs" style="font-size:14px;margin-top:8px">${reasons(k, t).map(r => `<li>${r}</li>`).join("")}</ul>${lv}</div>
+          <div class="why">قوة ${strength}%${t.acc ? ` · دقة ${t.acc.pct}%` : ""}${lockTxt}</div>
+          <ul class="rs">${reasons(k, t).slice(0, 2).map(r => `<li>${r}</li>`).join("")}</ul>${lv}</div>
         ${newsPane}
       </div>${agree}</div>`;
   }).join("");
@@ -317,13 +336,32 @@ function render() {
   }
 }
 
+// تثبيت الإشارة: بعد إعطاء شراء/بيع تبقى ثابتة 5 دقائق (مدة التوقع)،
+// ولا تنعكس قبلها إلا إذا جاءت إشارة معاكسة قوية جداً (قوة 60% أو أكثر)
+const LOCK = {};
+function stabilize(k, t) {
+  if (!t.fx) return t;
+  const now = Date.now(), L = LOCK[k];
+  const active = L && now < L.until;
+  if (active && t.dir !== L.dir) {
+    const strongOpp = t.dir !== "wait" && Math.abs(t.score) >= 60;
+    if (!strongOpp) return { ...t, dir: L.dir, sl: L.sl, tp: L.tp, entry: L.entry, locked: L.until };
+  }
+  if (t.dir !== "wait" && (!active || t.dir !== L.dir)) {
+    LOCK[k] = { dir: t.dir, until: now + HORIZON * 60000, sl: t.sl, tp: t.tp, entry: t.price };
+  }
+  const M = LOCK[k];
+  if (M && now < M.until && M.dir === t.dir) return { ...t, sl: M.sl, tp: M.tp, entry: M.entry, locked: M.until };
+  return t;
+}
+
 async function runTech() {
   const o = { slMult: +$("slMult").value || 1.5, rr: +$("rr").value || 1.5, thr: Math.max(0, +$("thr").value || 0) };
   store.set("thr", o.thr);
   await Promise.all(Object.keys(ASSETS).map(async k => {
     try {
       const [a, h] = await Promise.all([klines(k, "1m", 1000), klines(k, "15m", 200)]);
-      TECH[k] = { ...analyze(k, a.bars, h.bars, o), sym: a.sym };
+      TECH[k] = stabilize(k, { ...analyze(k, a.bars, h.bars, o), sym: a.sym });
     } catch (e) {
       TECH[k] = { error: location.protocol === "file:" || location.protocol === "https:" ? "تأكد من الإنترنت" : "افتح البرنامج بمتصفح Chrome" };
     }
