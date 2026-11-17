@@ -10,6 +10,8 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write        # لنشر لوحة التطبيق (فرع bot-data فقط)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,12 +28,14 @@ jobs:
           CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
           CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: "1"                # نشر بيانات لوحة التطبيق (0 = إيقاف)
           # ===== الحساب: demo أو live =====
           # للحقيقي: CAP_ENV "live" + LIVE_CONFIRM "I_UNDERSTAND" (والمفاتيح الثلاثة أعلاه لحسابك الحقيقي)
-          CAP_ENV: "demo"
-          LIVE_CONFIRM: ""
+          CAP_ENV: "live"
+          LIVE_CONFIRM: "I_UNDERSTAND"
           # بلا حدود على الحساب الحقيقي يحتاج أيضاً: LIVE_NO_LIMITS "I_ACCEPT_UNLIMITED_RISK"
-          LIVE_NO_LIMITS: ""
+          LIVE_NO_LIMITS: "I_ACCEPT_UNLIMITED_RISK"
           # ===== المخاطرة =====
           RISK_PCT: "2"               # أقصى خسارة للصفقة = هذه النسبة من الرصيد (وقف الخسارة عند الوسيط دائماً)
           TRADE_RISK_EUR: "25"        # سقف خسارة الصفقة الواحدة باليورو (0 = بلا سقف)
