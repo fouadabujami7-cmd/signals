@@ -11,8 +11,13 @@
    |النتيجة| >= ENTRY_THR، والفني والذكاء الاصطناعي غير متعاكسين.
 4) الحجم = (الرصيد × RISK_PCT%) ÷ (مسافة الوقف × حجم العقد) → أقصى خسارة للصفقة = RISK_PCT% من الرصيد.
 
+الأسهم (STOCKS=1): يمسح كل أسهم Capital.com (أوروبية وأمريكية) كل دورة، يختار الأنشط والأرخص سبريداً المفتوحة الآن،
+يحللها بنفس الطريقة (فني + مرتدات + ذكاء اصطناعي) ويفتح حتى MAX_NEW_PER_CYCLE صفقات معاً عند وجود فرصة حقيقية.
+MAX_OPEN=0 ومعه حد الخسارة اليومي 0 = بلا حدود. على الحساب الحقيقي يحتاج LIVE_NO_LIMITS=I_ACCEPT_UNLIMITED_RISK.
+وقف الخسارة عند الوسيط يوضع دائماً لكل صفقة ولا يمكن إلغاؤه.
+
 الحماية:
-- لا أكثر من MAX_OPEN صفقات مفتوحة، وصفقة واحدة لكل سوق.
+- لا أكثر من MAX_OPEN صفقات مفتوحة (0 = بلا حد)، وصفقة واحدة لكل سوق.
 - حد خسارة ثابت MAX_DAILY_LOSS_EUR (مثلاً 100€): خسارة اليوم + خطر كل الصفقات المفتوحة لا يتجاوزه أبداً.
 - تأمين: عندما يصل الربح لمسافة الوقف، ينقل الوقف لسعر الدخول (صفقة بلا خسارة).
 - صفقة إضافية من نفس السوق فقط بعد تأمين الصفقات السابقة فيه (حتى MAX_PER_EPIC).
@@ -58,6 +63,18 @@ GUARANTEED = E("GUARANTEED_STOP", "1") == "1"
 AI_EVERY_MIN = float(E("AI_EVERY_MIN", "60"))
 LOOP_MINUTES = float(E("LOOP_MINUTES", "14"))
 DRY_RUN = E("DRY_RUN", "0") == "1"
+# ===== الأسهم (أوروبية وأمريكية) =====
+STOCKS = E("STOCKS", "1") == "1"                              # مسح كل أسهم Capital.com واختيار الأنسب
+STOCK_TOP = int(E("STOCK_TOP", "20"))                         # كم سهماً يُحلَّل بالتفصيل كل دورة (الأنشط والأرخص سبريداً)
+STOCK_MAX_SPREAD_PCT = float(E("STOCK_MAX_SPREAD_PCT", "0.15"))   # تجاهل الأسهم التي سبريدها أكبر من هذه النسبة من السعر
+STOCK_NODES_RE = E("STOCK_NODES_RE", "share|stock|aktie")     # أسماء أقسام الأسهم في قائمة الأسواق
+STOCK_EPICS_EXTRA = [x.strip() for x in E("STOCK_EPICS", "").split(",") if x.strip()]   # أسهم تضيفها يدوياً (اختياري)
+MAX_UNIVERSE = int(E("MAX_UNIVERSE", "3000"))
+MAX_NODE_CALLS = int(E("MAX_NODE_CALLS", "400"))
+MAX_NEW_PER_CYCLE = int(E("MAX_NEW_PER_CYCLE", "10"))         # أقصى صفقات جديدة تُفتح معاً في الدورة الواحدة
+MAX_MARGIN_PCT = float(E("MAX_MARGIN_PCT", "15"))             # أقصى هامش لصفقة سهم واحدة كنسبة من الرصيد (0 = بلا سقف)
+AI_MIN_GAP_MIN = float(E("AI_MIN_GAP_MIN", "30"))             # أقل فاصل بين طلبين للذكاء الاصطناعي عند ظهور أسهم جديدة
+LIVE_NO_LIMITS = E("LIVE_NO_LIMITS", "") == "I_ACCEPT_UNLIMITED_RISK"
 STATE_FILE = "state.json"
 BERLIN = ZoneInfo("Europe/Berlin")
 WEIGHTS = {"trend": 2, "cross": 1.5, "slope": 1, "rsi": 1, "macd": 1, "mom": 1.5, "live": 0.5}
@@ -202,7 +219,7 @@ def save_state(s):
 
 
 def ask_claude(prompt):
-    body = {"model": "claude-sonnet-5-5", "max_tokens": 3000, "messages": [{"role": "user", "content": prompt}],
+    body = {"model": "claude-sonnet-5-5", "max_tokens": 4500, "messages": [{"role": "user", "content": prompt}],
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}]}
     base = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
     auths = [{"authorization": "Bearer " + CLAUDE_KEY}, {"x-api-key": CLAUDE_KEY}]
@@ -227,31 +244,50 @@ def ask_claude(prompt):
     raise RuntimeError(last or "لا رد")
 
 
-def ai_view(state):
+def ai_fresh(a):
+    """رأي الذكاء الاصطناعي صالح فقط إذا لم يمض عليه أكثر من ضعف AI_EVERY_MIN"""
+    if isinstance(a, dict) and time.time() - float(a.get("t", 0)) <= 2 * AI_EVERY_MIN * 60:
+        return a
+    return None
+
+
+def ai_view(state, symbols=None, names=None):
+    """symbols: الأسواق المطلوب رأيها (الذهب/النفط + الأسهم المرشّحة الآن). الأسهم الجديدة تُضاف دون انتظار ساعة كاملة (بفاصل AI_MIN_GAP_MIN)."""
     if not CLAUDE_KEY:
         return {}
+    symbols, names = symbols or list(EPICS), names or {}
     ai = state.get("ai", {})
-    if time.time() - ai.get("time", 0) < AI_EVERY_MIN * 60:
-        return ai.get("data", {})
+    data = ai.get("data", {})
+    age = time.time() - ai.get("time", 0)
+    missing = [s for s in symbols if not ai_fresh(data.get(s))]
+    if age < AI_EVERY_MIN * 60 and (not missing or age < AI_MIN_GAP_MIN * 60):
+        return data
     now = datetime.now(BERLIN).strftime("%Y-%m-%d %H:%M")
+    listing = ", ".join(f"{s} ({names[s]})" if names.get(s) else s for s in symbols)
     prompt = f"""أنت محلل أسواق للمضاربة قصيرة المدى. الوقت الآن {now} بتوقيت برلين.
-ابحث في الإنترنت عن أحدث الأخبار (آخر 24 ساعة) والأحداث القادمة اليوم: البنوك المركزية، التضخم والوظائف، الجيوسياسة، أوبك، آراء البنوك الكبرى، ومزاج المتداولين.
-ثم أعطِ الاتجاه الأرجح للساعات القليلة القادمة لكل سوق من هذه الرموز (رموز Capital.com): {", ".join(EPICS)}.
-اختر buy أو sell عندما يوجد سبب واضح، و wait إذا كان هناك خبر قوي خلال 30 دقيقة أو الصورة متضاربة.
-أجب في النهاية بـ JSON فقط بدون أي نص بعده، بهذا الشكل:
+ابحث في الإنترنت عن أحدث الأخبار (آخر 24 ساعة) والأحداث القادمة اليوم: البنوك المركزية، التضخم والوظائف، الجيوسياسة، أوبك، نتائج الشركات وتوصيات المحللين، آراء البنوك الكبرى، ومزاج المتداولين.
+ثم أعطِ الاتجاه الأرجح للساعات القليلة القادمة لكل سوق من هذه الرموز (رموز Capital.com): {listing}.
+اختر buy أو sell عندما يوجد سبب واضح، و wait إذا كان هناك خبر قوي خلال 30 دقيقة أو الصورة متضاربة أو لا يوجد محفّز واضح لسهم معيّن.
+أجب في النهاية بـ JSON فقط بدون أي نص بعده، بهذا الشكل (مفتاح لكل رمز بالضبط كما كُتب):
 {{"GOLD":{{"bias":"buy|sell|wait","confidence":0-100,"reason":"جملة قصيرة"}}, ...}}"""
     try:
-        data = ask_claude(prompt)
-        state["ai"] = {"time": time.time(), "data": data}
+        new = ask_claude(prompt)
+        stamp = time.time()
+        for v in new.values():
+            if isinstance(v, dict):
+                v["t"] = stamp
+        merged = {k: v for k, v in data.items() if ai_fresh(v)}   # نحتفظ بالآراء الحديثة السابقة ونحدّث الجديدة
+        merged.update(new)
+        state["ai"] = {"time": stamp, "data": merged}
         save_state(state)
         log("🤖 تحليل الذكاء الاصطناعي:")
-        for k, v in data.items():
+        for k, v in new.items():
             if isinstance(v, dict):
                 log(f"   {k}: {v.get('bias')} {v.get('confidence')}% — {v.get('reason', '')}")
-        return data
+        return merged
     except Exception as e:
         log("⚠️ تعذّر تحليل الذكاء الاصطناعي:", e)
-        return ai.get("data", {})
+        return data
 
 
 # ===== الحساب =====
@@ -320,6 +356,11 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
     size = step_round(risk_money / (dist * lot), step)
     max_size = float((rules.get("maxDealSize") or {}).get("value") or 1e12)
     size = min(size, max_size)
+    cap_size = None                                 # سقف الهامش لصفقة سهم (الأسهم وقفها قريب فيطلع حجم ضخم بدون هذا السقف)
+    mf = float(inst.get("marginFactor") or 0)
+    if epic not in SIZE_RANGES and MAX_MARGIN_PCT > 0 and mf > 0:
+        cap_size = step_round(bal * MAX_MARGIN_PCT / 100 / (price * lot * mf / 100), step)
+        size = min(size, cap_size)
     if epic in SIZE_RANGES:                         # حدودك أنت لها الأولوية
         lo, hi = SIZE_RANGES[epic]
         size = min(max(size, lo), hi)
@@ -328,6 +369,8 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
             log(f"{epic}: أصغر حجم ({min_size}) خطره أكبر من {RISK_PCT}% — تخطي"); return
         size = min_size
     size = max(size, min_size)
+    if cap_size is not None and size > cap_size:
+        log(f"{epic}: أصغر حجم ({min_size}) يتجاوز سقف الهامش {MAX_MARGIN_PCT:.0f}% من الرصيد — تخطي"); return
     dec = int(snap.get("decimalPlacesFactor") or (3 if price < 10 else 2))
     stop = round(price - dist if buy else price + dist, dec)
     target = round(price + dist * RR if buy else price - dist * RR, dec)
@@ -352,7 +395,8 @@ def open_trade(cap, epic, direction, t, bal, ai_reason, budget, levels=None):
             c = cap.call("GET", f"/confirms/{ref}")
             log(f"{epic}: {c.get('dealStatus')} {c.get('reason', '')} {'(وقف مضمون)' if g else ''}")
             if c.get("dealStatus") == "ACCEPTED":
-                return loss
+                ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
+                return {"loss": loss, "ids": list(dict.fromkeys(i for i in ids if i))}
         except Exception as e:
             log(f"{epic}: رفض {'بوقف مضمون' if g else ''}: {e}")
 
@@ -398,13 +442,99 @@ def day_pnl(state, bal):
     return bal - state["start_bal"]
 
 
+def nav(cap, node=None):
+    return cap.call("GET", "/marketnavigation" + (f"/{node}?limit=500" if node else ""))
+
+
+def build_universe(cap, state):
+    """كل أسهم Capital.com المتاحة (أوروبية وأمريكية وغيرها). تُحدَّث مرة كل 24 ساعة وتُحفظ في state."""
+    u = state.get("universe") or {}
+    if u and u.get("time", 0) > time.time() - 24 * 3600:
+        return u.get("epics", {})
+    epics, calls = {}, [0]
+
+    def walk(node_id, depth):
+        if not node_id or calls[0] >= MAX_NODE_CALLS or depth > 4 or len(epics) >= MAX_UNIVERSE:
+            return
+        calls[0] += 1
+        try:
+            d = nav(cap, node_id)
+        except Exception as e:
+            log("⚠️ تصفّح قسم الأسواق:", e)
+            return
+        time.sleep(0.12)
+        for m in d.get("markets") or []:
+            if str(m.get("instrumentType", "")).upper() == "SHARES" and m.get("epic"):
+                epics[m["epic"]] = m.get("instrumentName", "")
+        for n in d.get("nodes") or []:
+            walk(n.get("id"), depth + 1)
+
+    try:
+        for n in nav(cap).get("nodes") or []:
+            if re.search(STOCK_NODES_RE, str(n.get("name", "")), re.I):
+                walk(n.get("id"), 1)
+    except Exception as e:
+        log("⚠️ تعذّر قراءة قائمة الأسواق:", e)
+    for e in STOCK_EPICS_EXTRA:
+        epics.setdefault(e, "")
+    log(f"📚 قائمة الأسهم: {len(epics)} سهم ({calls[0]} طلب)")
+    if not epics:
+        log("⚠️ لم أجد أسهماً — أضف رموزاً يدوياً في STOCK_EPICS أو عدّل STOCK_NODES_RE")
+    # إذا فشل البحث نعيد المحاولة بعد ساعة فقط (لا نكرر الطلبات كل دقيقة)
+    state["universe"] = {"time": time.time() if epics else time.time() - 23 * 3600, "epics": epics}
+    save_state(state)
+    return epics
+
+
+def scan_stocks(cap, universe):
+    """يمسح كل الأسهم دفعات (50 رمزاً/طلب) ويرجع الأنشط (حركة اليوم + مدى الحركة) والأرخص سبريداً، المفتوحة الآن فقط."""
+    ep = [e for e in universe if e not in EPICS]
+    rows = []
+    for i in range(0, len(ep), 50):
+        chunk = ep[i:i + 50]
+        try:
+            d = cap.call("GET", "/markets?epics=" + urllib.parse.quote(",".join(chunk), safe=","))
+        except Exception as e:
+            log("⚠️ مسح دفعة أسهم:", e)
+            continue
+        time.sleep(0.12)
+        for m in d.get("marketDetails") or []:
+            s, ins = m.get("snapshot") or {}, m.get("instrument") or {}
+            if s.get("marketStatus") != "TRADEABLE" or not ins.get("epic"):
+                continue
+            try:
+                bid, ask = float(s["bid"]), float(s["offer"])
+                hi, lo = float(s.get("high") or 0), float(s.get("low") or 0)
+                chg = abs(float(s.get("percentageChange") or 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            mp = (bid + ask) / 2
+            if mp <= 0:
+                continue
+            spread = (ask - bid) / mp * 100
+            if spread > STOCK_MAX_SPREAD_PCT:
+                continue
+            rng = (hi - lo) / mp * 100 if hi > lo > 0 else 0
+            rows.append((chg + 0.5 * rng - 3 * spread, ins["epic"]))
+    rows.sort(reverse=True)
+    log(f"🔭 مسح الأسهم: {len(ep)} سهم، المفتوح والمناسب منها {len(rows)} → أحلل أفضل {min(STOCK_TOP, len(rows))}")
+    return [e for _, e in rows[:STOCK_TOP]]
+
+
 def cycle(cap, state):
     bal, cur = balance(cap)
     today = day_pnl(state, bal)
     allpos = cap.call("GET", "/positions").get("positions", [])
-    positions = [p for p in allpos if p["market"]["epic"] in EPICS]   # الروبوت لا يلمس صفقات الأسواق الأخرى
+    ours, ours_ep = set(state.get("ours", [])), set(state.get("ours_epics", []))
+    # الروبوت يدير فقط: صفقات أسواقه (EPICS) وصفقات الأسهم التي فتحها هو. لا يلمس صفقاتك اليدوية.
+    positions = [p for p in allpos if p["market"]["epic"] in EPICS or p["market"]["epic"] in ours_ep
+                 or p["position"]["dealId"] in ours]
     if len(allpos) > len(positions):
-        log(f"(تجاهل {len(allpos) - len(positions)} صفقة في أسواق أخرى)")
+        log(f"(تجاهل {len(allpos) - len(positions)} صفقة ليست من الروبوت)")
+    live_ids = {p["position"]["dealId"] for p in allpos}
+    live_eps = {p["market"]["epic"] for p in allpos}
+    state["ours"] = [i for i in ours if i in live_ids]
+    state["ours_epics"] = [e for e in ours_ep if e in live_eps]
     # إغلاق بالوقت (معطّل افتراضياً) + تأمين الصفقات الرابحة
     for p in positions:
         pos = p["position"]
@@ -419,52 +549,74 @@ def cycle(cap, state):
             secure(cap, p)
         except Exception as e:
             log(f"{p['market']['epic']}: تعذّر التأمين", e)
-    # حد الخسارة: خسارة اليوم + خطر الصفقات المفتوحة لا يتجاوز الحد
-    limit = MAX_DAILY_LOSS_EUR if MAX_DAILY_LOSS_EUR > 0 else bal * MAX_DAILY_LOSS_PCT / 100
+    # حد الخسارة اليومي (اختياري): خسارة اليوم + خطر الصفقات المفتوحة لا يتجاوزه. إذا كان كله 0 فلا حد.
+    cap_open = MAX_OPEN if MAX_OPEN > 0 else 10 ** 9
+    if MAX_DAILY_LOSS_EUR > 0:
+        limit = MAX_DAILY_LOSS_EUR
+    elif MAX_DAILY_LOSS_PCT > 0:
+        limit = bal * MAX_DAILY_LOSS_PCT / 100
+    else:
+        limit = None
     open_risk = sum(pos_risk(p) for p in positions)
-    budget = limit + min(today, 0) - open_risk
-    log(f"الرصيد {bal:.2f} {cur} | اليوم {today:+.2f} | مفتوحة {len(positions)}/{MAX_OPEN} | "
-        f"خطر مفتوح {open_risk:.2f} | المتبقي من حد {limit:.0f}: {budget:.2f}")
-    if budget <= 0 or len(positions) >= MAX_OPEN:
+    budget = 1e12 if limit is None else limit + min(today, 0) - open_risk
+    log(f"الرصيد {bal:.2f} {cur} | اليوم {today:+.2f} | مفتوحة {len(positions)}/{MAX_OPEN or '∞'} | خطر مفتوح {open_risk:.2f} | "
+        + (f"المتبقي من حد {limit:.0f}: {budget:.2f}" if limit is not None else "بلا حد يومي"))
+    if budget <= 0 or len(positions) >= cap_open:
         if budget <= 0:
             log("⛔ لا مجال لصفقات جديدة (حد الخسارة)")
         return
-    # سوق مسموح فيه صفقة جديدة: لا صفقات فيه، أو كل صفقاته مؤمّنة، وبحد MAX_PER_EPIC
+    # سوق مسموح فيه صفقة جديدة: لا صفقات فيه، أو كل صفقاته مؤمّنة، وبحد MAX_PER_EPIC (سهم واحد = صفقة واحدة)
     by_epic = {}
     for p in positions:
         by_epic.setdefault(p["market"]["epic"], []).append(p)
-    ai = ai_view(state)
+    stocks, names = [], (state.get("universe") or {}).get("epics", {})
+    if STOCKS:
+        try:
+            names = build_universe(cap, state)
+            stocks = scan_stocks(cap, names)
+        except Exception as e:
+            log("⚠️ تعذّر مسح الأسهم:", e)
+    ai = ai_view(state, EPICS + stocks, names)
     candidates = []
-    for epic in EPICS:
+    for epic in EPICS + stocks:
         mine = by_epic.get(epic, [])
-        if len(mine) >= MAX_PER_EPIC or any(pos_risk(p) > 0 for p in mine):
+        max_here = MAX_PER_EPIC if epic in EPICS else 1
+        if len(mine) >= max_here or any(pos_risk(p) > 0 for p in mine):
             continue
+        label = epic if epic in EPICS or not names.get(epic) else f"{epic} ({names[epic]})"
         try:
             t = tech(cap, epic)
+            time.sleep(0.15)
             if not t:
                 continue
-            a = ai.get(epic) if isinstance(ai.get(epic), dict) else None
+            a = ai_fresh(ai.get(epic))
             r = t.get("rebound")
             if r and not (a and a.get("bias") == "wait"):
-                log(f"{epic}: ⚡ {r['why']} → ✅ {r['dir']}")
+                log(f"{label}: ⚡ {r['why']} → ✅ {r['dir']}")
                 candidates.append((101, epic, r["dir"], t, r["why"], r))
                 continue
             d, final, why = decide(t, a)
-            log(f"{epic}: فني {t['score']:+d}" + (f" | AI {a.get('bias')} {a.get('confidence')}%" if a else "")
+            log(f"{label}: فني {t['score']:+d}" + (f" | AI {a.get('bias')} {a.get('confidence')}%" if a else "")
                 + f" → {final:+d} {('✅ ' + d) if d else why}" + (f" | صفقات مؤمّنة {len(mine)}" if mine else ""))
             if d:
                 candidates.append((abs(final), epic, d, t, (a or {}).get("reason", ""), None))
         except Exception as e:
-            log(f"{epic}: خطأ", e)
-    for _, epic, d, t, reason, lv in sorted(candidates, key=lambda x: -x[0])[: MAX_OPEN - len(positions)]:
+            log(f"{label}: خطأ", e)
+    slots = max(0, min(MAX_NEW_PER_CYCLE, cap_open - len(positions)))
+    for _, epic, d, t, reason, lv in sorted(candidates, key=lambda x: -x[0])[:slots]:
         if budget <= 0:
             break
         try:
-            used = open_trade(cap, epic, d, t, bal, reason, budget, lv)
-            if used:
-                budget -= used
+            res = open_trade(cap, epic, d, t, bal, reason, budget, lv)
+            if res:
+                budget -= res["loss"]
+                if epic not in EPICS:
+                    state.setdefault("ours_epics", []).append(epic)
+                state.setdefault("ours", []).extend(res["ids"])
+                save_state(state)
         except Exception as e:
             log(f"{epic}: خطأ في فتح الصفقة", e)
+        time.sleep(0.15)
 
 
 def discover(cap):
@@ -492,8 +644,14 @@ def main():
         raise SystemExit("أضف CAP_API_KEY و CAP_IDENTIFIER و CAP_PASSWORD في GitHub Secrets")
     if E("CAP_ENV") == "live" and not LIVE:
         log("⚠️ CAP_ENV=live لكن بدون LIVE_CONFIRM=I_UNDERSTAND — سأعمل على الحساب التجريبي")
-    log(f"الإعدادات: مخاطرة {RISK_PCT}% | حد الخسارة {MAX_DAILY_LOSS_EUR:.0f}€ | أقصى صفقات {MAX_OPEN} "
-        f"({MAX_PER_EPIC} لكل سوق) | مرتدات {'نعم' if REBOUND else 'لا'} | أسواق {', '.join(EPICS)}")
+    unlimited = MAX_OPEN <= 0 or (MAX_DAILY_LOSS_EUR <= 0 and MAX_DAILY_LOSS_PCT <= 0)
+    if LIVE and unlimited and not LIVE_NO_LIMITS:
+        raise SystemExit("⛔ الحساب الحقيقي بدون حدود (MAX_OPEN=0 أو بلا حد خسارة يومي) يحتاج تأكيداً صريحاً: "
+                         "LIVE_NO_LIMITS: \"I_ACCEPT_UNLIMITED_RISK\" في bot.yml. أو ضع حدوداً.")
+    log(f"الإعدادات: مخاطرة {RISK_PCT}%/صفقة (حتى {TRADE_RISK_EUR:.0f}€) | حد الخسارة اليومي "
+        + (f"{MAX_DAILY_LOSS_EUR:.0f}€" if MAX_DAILY_LOSS_EUR > 0 else (f"{MAX_DAILY_LOSS_PCT}%" if MAX_DAILY_LOSS_PCT > 0 else "بلا حد"))
+        + f" | أقصى صفقات {MAX_OPEN or 'بلا حد'} (حتى {MAX_NEW_PER_CYCLE} جديدة معاً) | مرتدات {'نعم' if REBOUND else 'لا'} "
+        f"| أسهم {'نعم' if STOCKS else 'لا'} | أسواق {', '.join(EPICS)}")
     cap, state = Capital(), load_state()
     cap.login()
     if not state.get("discovered"):

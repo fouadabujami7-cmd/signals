@@ -27,16 +27,29 @@ jobs:
           CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # ===== الحساب: demo أو live =====
+          # للحقيقي: CAP_ENV "live" + LIVE_CONFIRM "I_UNDERSTAND" (والمفاتيح الثلاثة أعلاه لحسابك الحقيقي)
           CAP_ENV: "demo"
           LIVE_CONFIRM: ""
+          # بلا حدود على الحساب الحقيقي يحتاج أيضاً: LIVE_NO_LIMITS "I_ACCEPT_UNLIMITED_RISK"
+          LIVE_NO_LIMITS: ""
           # ===== المخاطرة =====
-          RISK_PCT: "2"
-          MAX_DAILY_LOSS_EUR: "100"
-          TRADE_RISK_EUR: "25"
-          MAX_OPEN: "6"
-          MAX_PER_EPIC: "3"
+          RISK_PCT: "2"               # أقصى خسارة للصفقة = هذه النسبة من الرصيد (وقف الخسارة عند الوسيط دائماً)
+          TRADE_RISK_EUR: "25"        # سقف خسارة الصفقة الواحدة باليورو (0 = بلا سقف)
+          MAX_DAILY_LOSS_EUR: "0"     # حد خسارة يومي ثابت باليورو (0 = معطّل)
+          MAX_DAILY_LOSS_PCT: "0"     # أو كنسبة من الرصيد (0 = معطّل). الاثنان 0 = بلا حد يومي
+          MAX_OPEN: "0"               # أقصى صفقات مفتوحة معاً (0 = بلا حد)
+          MAX_NEW_PER_CYCLE: "10"     # صفقات جديدة تُفتح معاً في الدورة الواحدة (5-10)
+          MAX_PER_EPIC: "3"           # للذهب والنفط (السهم الواحد صفقة واحدة)
+          MAX_MARGIN_PCT: "15"        # أقصى هامش لصفقة سهم كنسبة من الرصيد (0 = بلا سقف)
           BE_TRIGGER: "1"
           GUARANTEED_STOP: "1"
+          # ===== الأسهم الأوروبية والأمريكية =====
+          STOCKS: "1"
+          STOCK_TOP: "20"             # كم سهماً يُحلَّل بالتفصيل كل دورة
+          STOCK_MAX_SPREAD_PCT: "0.15"
+          STOCK_NODES_RE: "share|stock|aktie"
+          STOCK_EPICS: ""             # رموز إضافية يدوياً مفصولة بفاصلة (اختياري)
+          AI_MIN_GAP_MIN: "30"
           # ===== الاستراتيجية =====
           EPICS: "GOLD,OIL_CRUDE"
           SIZE_RANGES: "GOLD:1-10,OIL_CRUDE:50-200"
