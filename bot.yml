@@ -47,8 +47,16 @@ jobs:
           STOCKS: "1"
           STOCK_TOP: "20"             # كم سهماً يُحلَّل بالتفصيل كل دورة
           STOCK_MAX_SPREAD_PCT: "0.15"
-          STOCK_NODES_RE: "share|stock|aktie"
+          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
           STOCK_EPICS: ""             # رموز إضافية يدوياً مفصولة بفاصلة (اختياري)
+          # ===== السياق: أخبار + ميول المتداولين (بدل الذكاء الاصطناعي) =====
+          USE_AI: "0"                 # 0 = بدون ذكاء اصطناعي (لا يحتاج ANTHROPIC_API_KEY). 1 = يعيد تشغيله
+          NEWS_HOURS: "12"            # عمر العناوين المعتبرة
+          NEWS_TTL_MIN: "30"          # كم دقيقة يُحفظ تحليل أخبار كل سوق
+          SENT_WEIGHT: "0.3"          # وزن ميول متداولي Capital.com (0 = تجاهله)
+          SENT_EDGE: "15"
+          CTX_VETO: "0.25"            # الأخبار/الميول تمنع الصفقة فقط إذا عاكستها بهذه القوة
+          NEWS_BLOCK: "trading halt,halted,bankruptcy,fraud,sec charges,investigation,probe,delisting"
           AI_MIN_GAP_MIN: "30"
           # ===== الاستراتيجية =====
           EPICS: "GOLD,OIL_CRUDE"

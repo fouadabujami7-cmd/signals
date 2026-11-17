@@ -5,7 +5,9 @@
     CAP_ENV: "live"   و   LIVE_CONFIRM: "I_UNDERSTAND"
 
 كيف يقرر:
-1) الذكاء الاصطناعي (مرة كل ساعة تقريباً) يبحث في الأخبار وآراء البنوك ويعطي لكل سوق: شراء/بيع/انتظار + ثقة.
+1) السياق: بدون ذكاء اصطناعي (USE_AI=0 افتراضياً): عناوين الأخبار الحديثة (Google News RSS) تُقيَّم بكلمات إيجابية/سلبية،
+   وميول متداولي Capital.com (نسبة الشراء) تُستخدم عكسياً عند التطرف. خبر خطير (إيقاف تداول، إفلاس، تحقيق...) يمنع الدخول.
+   يمكن تشغيل الذكاء الاصطناعي بدلاً منهما بـ USE_AI=1.
 2) التحليل الفني (كل دقيقة) يعطي نتيجة من -100 إلى +100 لاتجاه الدقائق القادمة.
 3) النتيجة النهائية = 60% فني + 40% ذكاء اصطناعي. يدخل فقط إذا:
    |النتيجة| >= ENTRY_THR، والفني والذكاء الاصطناعي غير متعاكسين.
@@ -67,7 +69,7 @@ DRY_RUN = E("DRY_RUN", "0") == "1"
 STOCKS = E("STOCKS", "1") == "1"                              # مسح كل أسهم Capital.com واختيار الأنسب
 STOCK_TOP = int(E("STOCK_TOP", "20"))                         # كم سهماً يُحلَّل بالتفصيل كل دورة (الأنشط والأرخص سبريداً)
 STOCK_MAX_SPREAD_PCT = float(E("STOCK_MAX_SPREAD_PCT", "0.15"))   # تجاهل الأسهم التي سبريدها أكبر من هذه النسبة من السعر
-STOCK_NODES_RE = E("STOCK_NODES_RE", "share|stock|aktie")     # أسماء أقسام الأسهم في قائمة الأسواق
+STOCK_NODES_RE = E("STOCK_NODES_RE", "share|stock|aktie|equit|accion|azioni|action")     # أسماء أقسام الأسهم في قائمة الأسواق
 STOCK_EPICS_EXTRA = [x.strip() for x in E("STOCK_EPICS", "").split(",") if x.strip()]   # أسهم تضيفها يدوياً (اختياري)
 MAX_UNIVERSE = int(E("MAX_UNIVERSE", "3000"))
 MAX_NODE_CALLS = int(E("MAX_NODE_CALLS", "400"))
@@ -75,6 +77,12 @@ MAX_NEW_PER_CYCLE = int(E("MAX_NEW_PER_CYCLE", "10"))         # أقصى صفق�
 MAX_MARGIN_PCT = float(E("MAX_MARGIN_PCT", "15"))             # أقصى هامش لصفقة سهم واحدة كنسبة من الرصيد (0 = بلا سقف)
 AI_MIN_GAP_MIN = float(E("AI_MIN_GAP_MIN", "30"))             # أقل فاصل بين طلبين للذكاء الاصطناعي عند ظهور أسهم جديدة
 LIVE_NO_LIMITS = E("LIVE_NO_LIMITS", "") == "I_ACCEPT_UNLIMITED_RISK"
+USE_AI = E("USE_AI", "0") == "1"                              # الذكاء الاصطناعي معطّل افتراضياً؛ البديل: أخبار + ميول المتداولين
+NEWS_HOURS = float(E("NEWS_HOURS", "12"))                     # عمر العناوين المعتبرة (ساعات)
+NEWS_TTL_MIN = float(E("NEWS_TTL_MIN", "30"))                 # كم يُحفظ تحليل أخبار سوق قبل إعادة الجلب
+SENT_WEIGHT = float(E("SENT_WEIGHT", "0.3"))                  # وزن ميول المتداولين (0 = تجاهله)
+SENT_EDGE = float(E("SENT_EDGE", "15"))                       # لا يُعتبر الميل إلا إذا ابتعدت نسبة الشراء عن 50% بهذا المقدار
+CTX_VETO = float(E("CTX_VETO", "0.25"))                       # الأخبار/الميول تمنع الصفقة فقط إذا عاكستها بهذه القوة
 STATE_FILE = "state.json"
 BERLIN = ZoneInfo("Europe/Berlin")
 WEIGHTS = {"trend": 2, "cross": 1.5, "slope": 1, "rsi": 1, "macd": 1, "mom": 1.5, "live": 0.5}
@@ -319,18 +327,128 @@ def step_round(x, step):
 
 
 # ===== منطق الصفقة =====
+# ===== سياق السوق بدون ذكاء اصطناعي: أخبار (عناوين) + ميول المتداولين على Capital.com =====
+POS_WORDS = ("surge", "soar", "jump", "rally", "beat", "upgrade", "record high", "raises", "raised", "strong", "gain",
+             "rise", "rises", "climb", "outperform", "approval", "approved", "wins", "profit", "growth", "bullish",
+             "boost", "higher", "recovers", "rebound")
+NEG_WORDS = ("plunge", "slump", "tumble", "drop", "falls", "fall", "miss", "downgrade", "weak", "loss", "losses",
+             "lawsuit", "probe", "investigation", "recall", "warning", "warns", "bearish", "sell-off", "selloff",
+             "slides", "sinks", "decline", "layoff", "fraud", "bankruptcy", "halt", "lower", "cuts", "slumps")
+NEWS_BLOCK = [w.strip().lower() for w in E("NEWS_BLOCK", "trading halt,halted,bankruptcy,fraud,sec charges,investigation,probe,delisting").split(",") if w.strip()]
+NEWS_QUERY = {"GOLD": "gold price", "OIL_CRUDE": "crude oil price"}
+
+
+def _clean_name(n):
+    return re.sub(r"\b(inc|corp|corporation|plc|ag|se|sa|nv|ltd|co|holdings?|group|class [a-z])\b\.?", "", n or "", flags=re.I).strip(" ,.-")
+
+
+def fetch_news(query):
+    """عناوين آخر NEWS_HOURS ساعة من Google News RSS (مجاني، بدون مفتاح). يرجع قائمة عناوين."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote_plus(query) + "&hl=en-US&gl=US&ceid=US:en"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        root = ET.fromstring(r.read())
+    out, now = [], datetime.now(timezone.utc)
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        try:
+            age_h = (now - parsedate_to_datetime(it.findtext("pubDate"))).total_seconds() / 3600
+        except Exception:
+            age_h = 0
+        if title and age_h <= NEWS_HOURS:
+            out.append(title)
+    return out[:15]
+
+
+def score_headlines(titles):
+    """-1..+1 من عدد الكلمات الإيجابية/السلبية في العناوين، و block إذا وُجد حدث خطير"""
+    if not titles:
+        return 0.0, False
+    tot, block = 0.0, False
+    for t in titles:
+        low = t.lower()
+        if any(w in low for w in NEWS_BLOCK):
+            block = True
+        p, n = sum(w in low for w in POS_WORDS), sum(w in low for w in NEG_WORDS)
+        tot += max(-1, min(1, p - n))
+    return max(-1.0, min(1.0, tot / max(3, len(titles)))), block
+
+
+def news_view(state, epic, name):
+    cache = state.setdefault("news", {})
+    c = cache.get(epic)
+    if c and time.time() - c["t"] < NEWS_TTL_MIN * 60:
+        return c
+    q = NEWS_QUERY.get(epic) or ((_clean_name(name) + " stock") if name else epic + " stock")
+    try:
+        titles = fetch_news(q)
+    except Exception as e:
+        if not state.get("news_err"):
+            log("⚠️ تعذّر جلب الأخبار (سأكمل بدونها):", e)
+            state["news_err"] = True
+        titles = []
+    s, block = score_headlines(titles)
+    c = {"t": time.time(), "score": s, "n": len(titles), "block": block, "top": titles[:2]}
+    cache[epic] = c
+    return c
+
+
+def sentiment_view(cap, state, epic):
+    """ميول المتداولين على Capital.com: نسبة الشراء. نستخدمه عكسياً عند التطرف (الأغلبية الكبيرة غالباً على الجهة الخاطئة)."""
+    cache = state.setdefault("sent", {})
+    c = cache.get(epic)
+    if c and time.time() - c["t"] < 600:
+        return c.get("long")
+    long = None
+    try:
+        d = cap.call("GET", f"/clientsentiment?marketIds={urllib.parse.quote(epic)}")
+        cs = (d.get("clientSentiments") or [{}])[0]
+        long = float(cs["longPositionPercentage"])
+    except Exception as e:
+        if not state.get("sent_err"):
+            log("⚠️ ميول المتداولين غير متاح لهذه الأسواق (سأكمل بدونه):", e)
+            state["sent_err"] = True
+    cache[epic] = {"t": time.time(), "long": long}
+    return long
+
+
+def market_ctx(cap, state, epic, name):
+    """يبني رأياً بنفس شكل رأي الذكاء الاصطناعي من الأخبار + الميول. None إذا لا يوجد شيء ذي معنى."""
+    nv = news_view(state, epic, name)
+    long = sentiment_view(cap, state, epic)
+    sent = 0.0
+    if long is not None and abs(long - 50) >= SENT_EDGE:
+        sent = max(-1.0, min(1.0, (50 - long) / 30))          # أغلبية شراء = ميل هبوطي، والعكس
+    parts = []
+    if nv["n"]:
+        parts.append(f"أخبار {nv['score']:+.2f} ({nv['n']} عنوان)")
+    if long is not None:
+        parts.append(f"{long:.0f}% شراء")
+    why = " | ".join(parts)
+    if nv["top"]:
+        log(f"📰 {epic}: {nv['top'][0][:90]}")
+    if nv["block"]:
+        return {"bias": "wait", "confidence": 100, "reason": "خبر خطير (" + (nv["top"][0][:60] if nv["top"] else "") + ")", "soft": True, "t": time.time()}
+    a = max(-1.0, min(1.0, 0.7 * nv["score"] + SENT_WEIGHT * sent))
+    if abs(a) < 0.1:
+        return None
+    return {"bias": "buy" if a > 0 else "sell", "confidence": round(abs(a) * 100), "reason": why, "soft": True, "t": time.time()}
+
+
 def decide(t, ai):
     """يرجع (الاتجاه، النتيجة النهائية، السبب)"""
     if ai and ai.get("bias") == "wait":
-        return None, 0, "الذكاء الاصطناعي ينصح بالانتظار (خبر قوي أو صورة متضاربة)"
+        return None, 0, ai.get("reason") or "الذكاء الاصطناعي ينصح بالانتظار (خبر قوي أو صورة متضاربة)"
     if ai and ai.get("bias") in ("buy", "sell"):
         a = {"buy": 1, "sell": -1}[ai["bias"]] * (float(ai.get("confidence", 50)) / 100)
-        if a * t["score"] < 0:
-            return None, 0, "الفني والذكاء الاصطناعي متعاكسان"
+        if a * t["score"] < 0 and not (ai.get("soft") and abs(a) < CTX_VETO):
+            return None, 0, "الفني والأخبار/الميول متعاكسان" if ai.get("soft") else "الفني والذكاء الاصطناعي متعاكسان"
         final = round(0.6 * t["score"] + 40 * a)
         thr = ENTRY_THR
     else:
-        final, thr = t["score"], ENTRY_THR + 10    # بدون ذكاء اصطناعي: نطلب قوة أعلى
+        final, thr = t["score"], ENTRY_THR + 10    # بدون سياق (أخبار/ميول): نطلب قوة فنية أعلى
     if abs(final) < thr:
         return None, final, "القوة غير كافية"
     return ("BUY" if final > 0 else "SELL"), final, ""
@@ -470,9 +588,15 @@ def build_universe(cap, state):
             walk(n.get("id"), depth + 1)
 
     try:
-        for n in nav(cap).get("nodes") or []:
-            if re.search(STOCK_NODES_RE, str(n.get("name", "")), re.I):
-                walk(n.get("id"), 1)
+        roots = nav(cap).get("nodes") or []
+        log("📂 أقسام Capital.com: " + " | ".join(f"{n.get('name')} [{n.get('id')}]" for n in roots))
+        hit = [n for n in roots if re.search(STOCK_NODES_RE, f"{n.get('name', '')} {n.get('id', '')}", re.I)]
+        if not hit:   # لا قسم باسم أسهم: نمسح كل الأقسام عدا ما هو واضح أنه ليس أسهماً (نأخذ فقط ما نوعه SHARES)
+            skip = re.compile(r"crypto|currenc|forex|commodit|index|indic|metal|bond|option|fx", re.I)
+            hit = [n for n in roots if not skip.search(f"{n.get('name', '')} {n.get('id', '')}")]
+            log("⚠️ لا قسم باسم أسهم — أمسح هذه الأقسام: " + ", ".join(str(n.get("name")) for n in hit))
+        for n in hit:
+            walk(n.get("id"), 1)
     except Exception as e:
         log("⚠️ تعذّر قراءة قائمة الأسواق:", e)
     for e in STOCK_EPICS_EXTRA:
@@ -576,7 +700,7 @@ def cycle(cap, state):
             stocks = scan_stocks(cap, names)
         except Exception as e:
             log("⚠️ تعذّر مسح الأسهم:", e)
-    ai = ai_view(state, EPICS + stocks, names)
+    ai = ai_view(state, EPICS + stocks, names) if USE_AI else {}
     candidates = []
     for epic in EPICS + stocks:
         mine = by_epic.get(epic, [])
@@ -589,14 +713,16 @@ def cycle(cap, state):
             time.sleep(0.15)
             if not t:
                 continue
-            a = ai_fresh(ai.get(epic))
+            a = ai_fresh(ai.get(epic)) if USE_AI else None
+            if not USE_AI and (abs(t["score"]) >= 0.6 * ENTRY_THR or t.get("rebound")):
+                a = market_ctx(cap, state, epic, names.get(epic, ""))   # أخبار + ميول المتداولين فقط للمرشّحين
             r = t.get("rebound")
             if r and not (a and a.get("bias") == "wait"):
                 log(f"{label}: ⚡ {r['why']} → ✅ {r['dir']}")
                 candidates.append((101, epic, r["dir"], t, r["why"], r))
                 continue
             d, final, why = decide(t, a)
-            log(f"{label}: فني {t['score']:+d}" + (f" | AI {a.get('bias')} {a.get('confidence')}%" if a else "")
+            log(f"{label}: فني {t['score']:+d}" + (f" | {'AI' if USE_AI else 'سياق'} {a.get('bias')} {a.get('confidence')}% {('(' + a['reason'] + ')') if a.get('reason') and not USE_AI else ''}" if a else "")
                 + f" → {final:+d} {('✅ ' + d) if d else why}" + (f" | صفقات مؤمّنة {len(mine)}" if mine else ""))
             if d:
                 candidates.append((abs(final), epic, d, t, (a or {}).get("reason", ""), None))
