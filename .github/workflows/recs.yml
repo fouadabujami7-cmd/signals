@@ -1,0 +1,43 @@
+name: recs
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: recs
+  cancel-in-progress: true
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write        # لنشر recs.json على فرع bot-recs فقط
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: recs_state.json
+          key: recs-state-${{ github.run_id }}
+          restore-keys: recs-state-
+      - run: python bot.py
+        env:
+          CAP_API_KEY: ${{ secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECS_ONLY: "1"              # توصيات فقط: لا يفتح ولا يغلق ولا يعدّل أي صفقة
+          STATE_FILE: "recs_state.json"
+          CAP_ENV: "live"             # نفس حسابك (للقراءة فقط هنا)
+          LIVE_CONFIRM: "I_UNDERSTAND"
+          USE_AI: "0"
+          ENTRY_THR: "50"             # أقل قوة تظهر كتوصية
+          SL_MULT: "2"
+          RR: "0.8"
+          REC_MAX: "30"
+          REC_PER_TYPE: "SHARES:22,INDICES:8,COMMODITIES:8,CURRENCIES:8,CRYPTOCURRENCIES:8"
+          REC_SPREAD_PCT: "0.4"
+          STOCK_MAX_SPREAD_PCT: "0.15"
+          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
