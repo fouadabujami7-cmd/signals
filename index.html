@@ -80,9 +80,10 @@
 </style>
 </head>
 <body>
-<div class="tabs"><button id="tabSig" class="on">📈 الإشارات</button><button id="tabRec">🎯 التوصيات</button><button id="tabBot">🤖 البوت</button></div>
+<div class="tabs"><button id="tabSig" class="on">📈 الإشارات</button><button id="tabRec">🎯 التوصيات</button><button id="tabBot">🤖 البوت</button><button id="tabGold">🥇 الذهب</button></div>
 <div id="recView" class="fv"><iframe id="recFrame" title="توصيات الأسواق"></iframe></div>
 <div id="botView" class="fv"><iframe id="botFrame" title="لوحة البوت"></iframe></div>
+<div id="goldView" class="fv"><iframe id="goldFrame" title="روبوت الذهب"></iframe></div>
 <div class="wrap" id="sigView">
   <h1>إشارات الذهب والنفط</h1>
   <div class="mut" id="updated">جاري التحميل…</div>
@@ -521,16 +522,17 @@ setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30
 
 // ===== التبديل بين الإشارات ولوحة البوت =====
 function showTab(t) {
-  const views = { sig: "sigView", rec: "recView", bot: "botView" }, tabs = { sig: "tabSig", rec: "tabRec", bot: "tabBot" };
+  const views = { sig: "sigView", rec: "recView", bot: "botView", gold: "goldView" }, tabs = { sig: "tabSig", rec: "tabRec", bot: "tabBot", gold: "tabGold" };
   for (const k in views) { $(views[k]).style.display = k === t ? (k === "sig" ? "" : "block") : "none"; $(tabs[k]).classList.toggle("on", k === t); }
-  const fr = { rec: ["recFrame", "recs.html"], bot: ["botFrame", "bot.html"] }[t];
+  const fr = { rec: ["recFrame", "recs.html"], bot: ["botFrame", "bot.html"], gold: ["goldFrame", "gold.html"] }[t];
   if (fr && !$(fr[0]).getAttribute("src")) $(fr[0]).setAttribute("src", fr[1]);
   store.set("tab", t);
 }
 $("tabSig").onclick = () => showTab("sig");
 $("tabRec").onclick = () => showTab("rec");
 $("tabBot").onclick = () => showTab("bot");
-{ const t0 = store.get("tab", "sig"); showTab(["sig", "rec", "bot"].includes(t0) ? t0 : "sig"); }
+$("tabGold").onclick = () => showTab("gold");
+{ const t0 = store.get("tab", "sig"); showTab(["sig", "rec", "bot", "gold"].includes(t0) ? t0 : "sig"); }
 </script>
 </body>
 </html>

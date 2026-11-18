@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d1a12">
+<title>روبوت الذهب</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#EDF1F3;--card:#FFFFFF;--ink:#12202B;--muted:#5C6B77;--line:#D5DDE2;--soft:#F4F7F8;
+  --buy:#0F7B5F;--buy-bg:#DDF1EA;--sell:#B23A2B;--sell-bg:#F7E1DD;--warn:#8A5A00;--warn-bg:#FBEFCB;--accent:#1F4E79}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0E161C;--card:#16222B;--ink:#E6EDF1;--muted:#93A3AF;--line:#26343E;--soft:#1B2933;
+  --buy:#3DC59B;--buy-bg:#123A2F;--sell:#F07A68;--sell-bg:#44201B;--warn:#E8B23C;--warn-bg:#3A2D0E;--accent:#7FB2E5}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:15px;line-height:1.55;padding-bottom:24px}
+.num{font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate;display:inline-block}
+button{font:inherit;color:inherit}
+.wrap{max-width:560px;margin:0 auto;padding:0 16px}
+header{background:#12202B;color:#E6EDF1;padding:calc(14px + env(safe-area-inset-top,0px)) 0 14px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.top h1{font-size:17px;font-weight:600;margin:0}
+.status{display:flex;align-items:center;gap:7px;font-size:13px;color:#B9C7D1;margin-top:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:#6E7F8B}.dot.ok{background:#3DC59B}.dot.late{background:#E8B23C}.dot.off{background:#F07A68}
+.refresh{background:none;border:1px solid #3A4C59;color:#C9D6DF;border-radius:8px;padding:2px 10px;font-size:12.5px;cursor:pointer}
+.filters{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 8px;border-bottom:1px solid var(--line)}
+.chips{display:flex;gap:7px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chips+.chips{margin-top:7px}
+.fc{flex:0 0 auto;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.fc.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.banner{margin:14px 0 0;padding:11px 13px;border-radius:10px;background:var(--warn-bg);color:var(--warn);font-size:14px}
+.banner.err{background:var(--sell-bg);color:var(--sell)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.name{font-weight:600;font-size:16px;min-width:0;overflow-wrap:anywhere}
+.tag{font-size:12.5px;font-weight:600;border-radius:6px;padding:1px 8px;white-space:nowrap}
+.tag.buy{background:var(--buy-bg);color:var(--buy)}.tag.sell{background:var(--sell-bg);color:var(--sell)}
+.tag.neutral{background:var(--soft);color:var(--muted);border:1px solid var(--line)}.tag.warn{background:var(--warn-bg);color:var(--warn)}
+.dirbig{font-size:20px;font-weight:700;padding:2px 14px;border-radius:8px}
+.dirbig.buy{background:var(--buy-bg);color:var(--buy)}.dirbig.sell{background:var(--sell-bg);color:var(--sell)}
+.sub{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.kv div{background:var(--soft);border-radius:8px;padding:6px 8px}
+.kv span{display:block;font-size:12px;color:var(--muted)}.kv b{font-weight:600;font-size:14px}
+.kv .s b{color:var(--sell)}.kv .t b{color:var(--buy)}
+.ko{margin-top:8px;font-size:13px;color:var(--muted)}
+.why{font-size:13.5px;color:var(--muted);margin-top:8px}
+details summary{cursor:pointer;color:var(--accent);font-size:13px;margin-top:8px;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details ul{margin:6px 0 0;padding:0 18px 0 0;font-size:13.5px}
+.crowd{direction:ltr;display:flex;height:6px;border-radius:3px;overflow:hidden;margin:8px 0 2px}.crowd i{display:block}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;background:var(--card);border:1px dashed var(--line);border-radius:12px;margin-top:14px}
+.note{font-size:12.5px;color:var(--muted);margin:16px 0 0;line-height:1.7}
+.up{color:var(--buy)}.down{color:var(--sell)}
+.chip5{font-size:12px;color:var(--muted)}
+
+.stat{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.stat div{background:#ffffff12;border-radius:10px;padding:8px 11px}.stat span{display:block;font-size:12px;color:#B9C7D1}.stat b{font-size:19px;font-weight:700}
+h2{font-size:15px;font-weight:600;margin:20px 0 0;color:var(--ink)}
+.tf{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}.tf th,.tf td{padding:6px 4px;text-align:center;border-bottom:1px solid var(--line)}.tf th{color:var(--muted);font-weight:500}
+.st{display:flex;gap:9px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}.st:last-child{border:0}
+.ic{flex:0 0 22px;text-align:center}.st b{font-weight:600}.st small{display:block;color:var(--muted);font-size:12.5px}
+.ev{padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}.ev small{color:var(--muted)}
+pre{direction:ltr;text-align:left;white-space:pre-wrap;font-size:11.5px;background:var(--soft);padding:10px;border-radius:8px;max-height:260px;overflow:auto}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+ <div class="top"><h1>🥇 روبوت الذهب — حساب تجريبي</h1><button class="refresh" id="rf">تحديث</button></div>
+ <div class="status"><span class="dot" id="dot"></span><span id="stat">جاري التحميل…</span></div>
+ <div class="stat"><div><span>الرصيد (تجريبي)</span><b class="num" id="bal">—</b></div><div><span>ربح/خسارة اليوم</span><b class="num" id="day">—</b></div></div>
+</div></header>
+<div class="wrap">
+ <div id="ban"></div>
+ <h2>الصفقات المفتوحة</h2><div id="open"></div>
+ <h2>تحليل الذهب الآن</h2>
+ <div class="card"><div class="row"><b class="num" id="px">—</b><span id="sess" class="tag neutral">—</span></div>
+  <div class="sub" id="trend"></div>
+  <table class="tf"><thead><tr><th></th><th>الإغلاق</th><th>EMA21</th><th>RSI</th><th>ATR</th><th>آخر شمعة</th></tr></thead><tbody id="tfb"></tbody></table></div>
+ <h2>الاستراتيجيات الأربع</h2><div class="card" id="strat"></div>
+ <h2>آخر الأحداث</h2><div class="card" id="evs"></div>
+ <h2>سجل الإغلاقات (الذهب)</h2><div class="card" id="hist"></div>
+ <details><summary>سجل البوت التقني</summary><pre id="log"></pre></details>
+ <p class="note" id="note"></p>
+</div>
+<script>
+const SRC = "https://raw.githubusercontent.com/fouadabujami7-cmd/signals/gold-data/gold.json";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fm = (n, d = 2) => n == null ? "—" : Number(n).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
+const sg = n => (n > 0 ? "+" : "") + fm(n);
+const cls = n => n > 0 ? "up" : n < 0 ? "down" : "";
+const ICON = {signal: "✅", weak: "🟡", wait: "⏳", blocked: "⛔"};
+const TR = {1: "صاعد ▲", "-1": "هابط ▼", 0: "جانبي ─"};
+async function load() {
+  $("stat").textContent = "جاري التحديث…";
+  let d;
+  try {
+    const r = await fetch(SRC + "?t=" + Date.now(), {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) {
+    $("dot").className = "dot off"; $("stat").textContent = "ما في بيانات بعد";
+    $("ban").innerHTML = '<div class="banner err">لا يوجد gold.json بعد. شغّل workflow اسمه gold من تبويب Actions، وتأكد أن المستودع Public.</div>';
+    return;
+  }
+  const age = (Date.now() - new Date(d.updated)) / 60000;
+  $("dot").className = "dot " + (age < 8 ? "ok" : age < 25 ? "late" : "off");
+  $("stat").textContent = "آخر تحديث قبل " + (age < 1 ? "أقل من دقيقة" : Math.round(age) + " دقيقة") + " — تجريبي";
+  $("ban").innerHTML = age > 25 ? '<div class="banner">البيانات قديمة: الروبوت متوقف أو متأخر (GitHub يؤخّر الجدولة أحياناً).</div>' : "";
+  $("bal").textContent = fm(d.balance); $("day").textContent = sg(d.day_pnl); $("day").className = "num " + cls(d.day_pnl);
+  $("open").innerHTML = d.open.length ? d.open.map(o => `<div class="card"><div class="row"><span class="dirbig ${o.dir == "BUY" ? "buy" : "sell"}">${o.dir == "BUY" ? "شراء" : "بيع"}</span><b class="num ${cls(o.pnl)}">${sg(o.pnl)} $</b></div>
+    <div class="sub"><span class="tag neutral">${esc(o.strategy)}</span><span class="tag neutral">≈ ${fm(o.value_eur, 0)} €</span>${o.be ? '<span class="tag buy">🔒 مؤمّنة</span>' : ""}</div>
+    <div class="kv"><div><span>الدخول</span><b class="num">${fm(o.entry)}</b></div><div class="s"><span>الوقف</span><b class="num">${fm(o.stop)}</b></div><div class="t"><span>الهدف</span><b class="num">${fm(o.target)}</b></div></div>
+    <div class="why">${esc(o.why)}</div></div>`).join("") : '<div class="empty">ما في صفقات مفتوحة. الروبوت ينتظر إشارة مؤكدة.</div>';
+  const a = d.analysis;
+  if (a) {
+    $("px").textContent = fm(a.price); $("sess").textContent = "الجلسة: " + a.sess.quality + (a.sess.blackout ? " — وقت أخبار" : "");
+    $("sess").className = "tag " + (a.sess.ok ? "buy" : "warn");
+    $("trend").innerHTML = `<span class="tag neutral">الساعة: ${TR[a.h1]}</span><span class="tag neutral">15 د: ${TR[a.m15]}</span><span class="chip5">أقرب مستوى مدوّر: ${fm(a.levels.near, 0)}</span>`;
+    $("tfb").innerHTML = a.tf.map(t => `<tr><td><b>${t.name}</b></td><td><span class="num">${fm(t.close)}</span></td><td><span class="num">${fm(t.ema21)}</span></td><td>${t.rsi ?? "—"}</td><td><span class="num">${fm(t.atr)}</span></td><td>${t.pattern ? `<span class="tag ${t.pattern_dir > 0 ? "buy" : t.pattern_dir < 0 ? "sell" : "neutral"}">${esc(t.pattern)}</span>` : "—"}</td></tr>`).join("");
+    $("strat").innerHTML = a.status.map(s => `<div class="st"><span class="ic">${ICON[s.state] || "•"}</span><div><b>${esc(s.name)}</b><small>${esc(s.text)}</small></div></div>`).join("");
+  }
+  $("evs").innerHTML = d.events.length ? d.events.slice(0, 25).map(e => {
+    const t = new Date(e.t).toLocaleString("ar", {hour: "2-digit", minute: "2-digit", day: "numeric", month: "numeric"});
+    if (e.type == "open") return `<div class="ev"><b class="${e.dir == "BUY" ? "up" : "down"}">${e.dir == "BUY" ? "🟢 شراء" : "🔴 بيع"}</b> ${esc(e.strategy)} @ <span class="num">${fm(e.price)}</span> (≈${e.value_eur}€، قوة ${e.score})<br><small>${esc(e.why)}${e.pattern ? " — " + esc(e.pattern) : ""} | ${t}</small></div>`;
+    if (e.type == "close") return `<div class="ev"><b>⚪ إغلاق</b> ${esc(e.dir)} <b class="num ${cls(e.pnl)}">${sg(e.pnl)}</b><br><small>${esc(e.why)} | ${t}</small></div>`;
+    return `<div class="ev"><b>🔒 تأمين</b> <span class="num">${fm(e.price)}</span><br><small>${esc(e.why)} | ${t}</small></div>`;
+  }).join("") : '<div class="empty">لا أحداث بعد.</div>';
+  $("hist").innerHTML = d.history.length ? d.history.slice(0, 15).map(h => `<div class="ev row"><span class="chip5">${esc((h.t || "").slice(5, 16).replace("T", " "))}</span><b class="num ${cls(h.pnl)}">${sg(h.pnl)}</b></div>`).join("") : '<div class="empty">لا إغلاقات خلال 3 أيام.</div>';
+  $("log").textContent = (d.log || []).join("\n");
+  const s = d.settings;
+  $("note").textContent = `الإعدادات: ${s.trade_eur}€ لكل صفقة، حتى ${s.max_open || "∞"} صفقات معاً، الهدف = ${s.rr}× الوقف، أقل قوة ${s.min_score}، الدخول ${s.session} غرينتش (الأفضل ${s.best})، تأمين الصفقة عند ربح ${s.be_at_r}× الوقف. حساب تجريبي: لا مال حقيقي ولا ضمان نتائج.`;
+}
+$("rf").onclick = load; load(); setInterval(load, 60000);
+</script>
+</body>
+</html>
