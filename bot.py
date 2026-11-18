@@ -97,8 +97,16 @@ PUBLISH_ON = E("PUBLISH", "1") == "1"                          # نشر لوحة
 PUBLISH_BRANCH = E("PUBLISH_BRANCH", "bot-data")
 PUBLISH_REMOTE = E("PUBLISH_REMOTE", "")                       # للاختبار المحلي فقط
 NAMES_AR = {"GOLD": "الذهب", "OIL_CRUDE": "النفط الخام"}
+RECS_ONLY = E("RECS_ONLY", "0") == "1"                         # وضع التوصيات فقط: يحلل ويكتب recs.json ولا يفتح ولا يلمس أي صفقة
+REC_BRANCH = E("REC_BRANCH", "bot-recs")
+REC_PER_TYPE = {k.strip(): int(v) for k, v in (x.split(":") for x in E("REC_PER_TYPE", "SHARES:22,INDICES:8,COMMODITIES:8,CURRENCIES:8,CRYPTOCURRENCIES:8").split(",") if ":" in x)}
+REC_SPREAD_PCT = float(E("REC_SPREAD_PCT", "0.4"))             # أقصى سبريد لغير الأسهم (%)
+REC_CTX_TOP = int(E("REC_CTX_TOP", "16"))                      # كم سوقاً نجلب له أخبار وميول
+REC_MAX_SECONDS = float(E("REC_MAX_SECONDS", "210"))
+REC_NODE_CALLS = int(E("REC_NODE_CALLS", "700"))
+REC_MAX = int(E("REC_MAX", "30"))
 CTX_VETO = float(E("CTX_VETO", "0.25"))                       # الأخبار/الميول تمنع الصفقة فقط إذا عاكستها بهذه القوة
-STATE_FILE = "state.json"
+STATE_FILE = E("STATE_FILE", "state.json")
 BERLIN = ZoneInfo("Europe/Berlin")
 WEIGHTS = {"trend": 2, "cross": 1.5, "slope": 1, "rsi": 1, "macd": 1, "mom": 1.5, "live": 0.5}
 
@@ -742,15 +750,37 @@ def _scrub(s):
     return s.replace(GH_TOKEN, "***") if GH_TOKEN else s
 
 
-def publish(state, view):
-    """يكتب bot.json ويرفعه (force-push) لفرع bot-data. التطبيق يقرأه من هناك. لا يؤثر على الفرع الرئيسي ولا يترك تاريخاً."""
-    if not PUBLISH_ON:
-        return
+def push_file(name, data, branch):
+    """يكتب ملف JSON ويرفعه (force-push) لفرع منفصل بلقطة وحيدة بلا تاريخ. لا يؤثر على الفرع الرئيسي."""
     remote = PUBLISH_REMOTE or (f"https://x-access-token:{GH_TOKEN}@github.com/{GH_REPO}.git" if GH_TOKEN and GH_REPO else "")
     if not remote:
         if not _PUB_ERR[0]:
-            log("ℹ️ نشر اللوحة معطّل (لا GITHUB_TOKEN/GITHUB_REPOSITORY)")
+            log("ℹ️ نشر البيانات معطّل (لا GITHUB_TOKEN/GITHUB_REPOSITORY)")
             _PUB_ERR[0] = True
+        return
+    tmp = tempfile.mkdtemp(prefix="pub_")
+    try:
+        with open(os.path.join(tmp, name), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        for args in (["init", "-q"], ["checkout", "-q", "-b", branch], ["add", name], ["commit", "-q", "-m", "data"],
+                     ["push", "-q", "--force", remote, f"HEAD:refs/heads/{branch}"]):
+            r = subprocess.run(["git", "-c", "user.name=bot", "-c", "user.email=bot@users.noreply.github.com", *args],
+                               cwd=tmp, env=env, capture_output=True, text=True, timeout=40)
+            if r.returncode:
+                raise RuntimeError(_scrub((r.stderr or r.stdout or "")[:300]))
+        _PUB_ERR[0] = False
+    except Exception as e:
+        if not _PUB_ERR[0]:
+            log("⚠️ تعذّر نشر البيانات:", _scrub(str(e))[:300])
+            _PUB_ERR[0] = True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def publish(state, view):
+    """يكتب bot.json لفرع bot-data. التطبيق يقرأه من هناك."""
+    if not PUBLISH_ON:
         return
     mk = sorted(view.get("markets", []), key=lambda m: -abs(m.get("final") or 0))[:30]
     data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "live" if LIVE else "demo",
@@ -760,24 +790,166 @@ def publish(state, view):
                          "markets": EPICS, "max_new": MAX_NEW_PER_CYCLE},
             **{k: v for k, v in view.items() if k != "markets"}, "markets": mk,
             "events": state.get("events", [])[-120:][::-1], "log": list(LOG_BUF)}
-    tmp = tempfile.mkdtemp(prefix="pub_")
+    push_file("bot.json", data, PUBLISH_BRANCH)
+
+
+# ===== صفحة التوصيات: أي سوق على Capital.com (أسهم، مؤشرات، سلع، عملات، كريبتو) =====
+REC_TYPES = {"SHARES": "سهم", "INDICES": "مؤشر", "COMMODITIES": "سلعة", "CURRENCIES": "عملات", "CRYPTOCURRENCIES": "كريبتو"}
+
+
+def build_rec_universe(cap, state):
+    """كل الأسواق التي نوعها من REC_TYPES. تُحدَّث كل 24 ساعة. تُمسح الأقسام الصغيرة (مؤشرات/سلع/عملات) قبل الأسهم."""
+    u = state.get("rec_universe") or {}
+    if u and u.get("time", 0) > time.time() - 24 * 3600:
+        return u.get("epics", {})
+    epics, calls = {}, [0]
+
+    def walk(node_id, depth):
+        if not node_id or calls[0] >= REC_NODE_CALLS or depth > 4:
+            return
+        calls[0] += 1
+        try:
+            d = nav(cap, node_id)
+        except Exception as e:
+            log("⚠️ تصفّح قسم الأسواق:", e)
+            return
+        time.sleep(0.12)
+        for m in d.get("markets") or []:
+            ty = str(m.get("instrumentType", "")).upper()
+            if ty in REC_TYPES and m.get("epic") and len(epics) < 6000:
+                epics[m["epic"]] = {"n": m.get("instrumentName", ""), "t": ty}
+        for n in d.get("nodes") or []:
+            walk(n.get("id"), depth + 1)
+
     try:
-        with open(os.path.join(tmp, "bot.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        for args in (["init", "-q"], ["checkout", "-q", "-b", PUBLISH_BRANCH], ["add", "bot.json"], ["commit", "-q", "-m", "bot data"],
-                     ["push", "-q", "--force", remote, f"HEAD:refs/heads/{PUBLISH_BRANCH}"]):
-            r = subprocess.run(["git", "-c", "user.name=bot", "-c", "user.email=bot@users.noreply.github.com", *args],
-                               cwd=tmp, env=env, capture_output=True, text=True, timeout=40)
-            if r.returncode:
-                raise RuntimeError(_scrub((r.stderr or r.stdout or "")[:300]))
-        _PUB_ERR[0] = False
+        roots = nav(cap).get("nodes") or []
+        log("📂 أقسام Capital.com: " + " | ".join(f"{n.get('name')} [{n.get('id')}]" for n in roots))
+        is_sh = lambda n: bool(re.search(STOCK_NODES_RE, f"{n.get('name', '')} {n.get('id', '')}", re.I))
+        for n in sorted(roots, key=is_sh):                # الأسهم آخراً حتى لا تستهلك عدد الطلبات
+            walk(n.get("id"), 1)
     except Exception as e:
-        if not _PUB_ERR[0]:
-            log("⚠️ تعذّر نشر اللوحة:", _scrub(str(e))[:300])
-            _PUB_ERR[0] = True
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        log("⚠️ تعذّر قراءة قائمة الأسواق:", e)
+    cnt = {}
+    for v in epics.values():
+        cnt[v["t"]] = cnt.get(v["t"], 0) + 1
+    log(f"📚 أسواق التوصيات: {len(epics)} ({', '.join(f'{k}:{v}' for k, v in cnt.items())}) — {calls[0]} طلب")
+    state["rec_universe"] = {"time": time.time() if epics else time.time() - 23 * 3600, "epics": epics}
+    save_state(state)
+    return epics
+
+
+def scan_recs(cap, uni):
+    """يمسح كل الأسواق دفعات ويختار الأنشط من كل نوع (المفتوحة الآن فقط، سبريد معقول)."""
+    ep, rows = list(uni), {}
+    for i in range(0, len(ep), 50):
+        chunk = ep[i:i + 50]
+        try:
+            d = cap.call("GET", "/markets?epics=" + urllib.parse.quote(",".join(chunk), safe=","))
+        except Exception as e:
+            log("⚠️ مسح دفعة:", e)
+            continue
+        time.sleep(0.12)
+        for m in d.get("marketDetails") or []:
+            sn, ins = m.get("snapshot") or {}, m.get("instrument") or {}
+            epic = ins.get("epic")
+            if sn.get("marketStatus") != "TRADEABLE" or epic not in uni:
+                continue
+            try:
+                bid, ask = float(sn["bid"]), float(sn["offer"])
+                hi, lo = float(sn.get("high") or 0), float(sn.get("low") or 0)
+                chg = float(sn.get("percentageChange") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            mp = (bid + ask) / 2
+            if mp <= 0:
+                continue
+            spread = (ask - bid) / mp * 100
+            ty = uni[epic]["t"]
+            if spread > (STOCK_MAX_SPREAD_PCT if ty == "SHARES" else REC_SPREAD_PCT):
+                continue
+            rng = (hi - lo) / mp * 100 if hi > lo > 0 else 0
+            rows.setdefault(ty, []).append((abs(chg) + 0.5 * rng - 3 * spread, epic, chg))
+    pick = []
+    for ty, lst in rows.items():
+        lst.sort(reverse=True)
+        pick += [(e, c) for _, e, c in lst[:REC_PER_TYPE.get(ty, 5)]]
+    log(f"🔭 مسح التوصيات: " + ", ".join(f"{REC_TYPES.get(t, t)} {len(v)}" for t, v in rows.items()) + f" → أحلل {len(pick)}")
+    return pick
+
+
+def _grade(final, agree, ctx_ok):
+    a = abs(final)
+    if a >= 75 and agree >= 5 and ctx_ok:
+        return "قوية"
+    if a >= 60 and agree >= 4:
+        return "جيدة"
+    return "عادية"
+
+
+def run_recs(cap, state):
+    t0 = time.time()
+    uni = build_rec_universe(cap, state)
+    pick = scan_recs(cap, uni) if uni else []
+    techs = {}
+    for epic, chg in pick:
+        if time.time() - t0 > REC_MAX_SECONDS:
+            log("⏱ انتهى وقت التحليل — سأنشر ما تم")
+            break
+        try:
+            t = tech(cap, epic)
+            time.sleep(0.15)
+            if t:
+                techs[epic] = (t, chg)
+        except Exception as e:
+            log(f"{epic}: خطأ", e)
+    # أخبار + ميول لأقوى المرشحين فقط
+    cand = sorted(((abs(t["score"]), e) for e, (t, _) in techs.items() if abs(t["score"]) >= 0.6 * ENTRY_THR or t.get("rebound")), reverse=True)
+    ctx = {}
+    for _, epic in cand[:REC_CTX_TOP]:
+        if time.time() - t0 > REC_MAX_SECONDS:
+            break
+        try:
+            ctx[epic] = market_ctx(cap, state, epic, uni[epic]["n"])
+        except Exception as e:
+            log(f"{epic}: خطأ سياق", e)
+    recs = []
+    for epic, (t, chg) in techs.items():
+        a = ctx.get(epic)
+        r = t.get("rebound")
+        d = final = why = None
+        kind = "إشارة"
+        if r and not (a and a.get("bias") == "wait"):
+            d, final, why, kind = r["dir"], 101, r["why"], "مرتدة"
+            stop, target = r["stop"], r["target"]
+        else:
+            d, final, _w = decide(t, a)
+            if not d:
+                continue
+            stop = t["price"] - t["atr"] * SL_MULT if d == "BUY" else t["price"] + t["atr"] * SL_MULT
+            target = t["price"] + t["atr"] * SL_MULT * RR if d == "BUY" else t["price"] - t["atr"] * SL_MULT * RR
+        sgn = 1 if d == "BUY" else -1
+        agree = sum(1 for v in (t.get("fx") or {}).values() if v * sgn > 0.1)
+        ctx_ok = bool(a and a.get("bias") in ("buy", "sell") and {"buy": 1, "sell": -1}[a["bias"]] == sgn)
+        nv = (state.get("news") or {}).get(epic) or {}
+        sl = ((state.get("sent") or {}).get(epic) or {}).get("long")
+        pr = t["price"]
+        dc = 3 if pr < 10 else 2
+        ko = stop - sgn * 0.5 * t["atr"]                     # حاجز KO مقترح: أبعد من الوقف قليلاً
+        recs.append({"epic": epic, "name": uni[epic]["n"] or epic, "type": REC_TYPES.get(uni[epic]["t"], uni[epic]["t"]),
+                     "dir": d, "kind": kind, "score": final, "tech": t["score"], "agree": agree, "of": len(t.get("fx") or {}),
+                     "grade": _grade(final if final != 101 else 80, agree, ctx_ok), "ctx_ok": ctx_ok,
+                     "price": round(pr, dc), "stop": round(stop, dc), "target": round(target, dc), "ko": round(ko, dc),
+                     "atr_pct": round(t.get("atr_pct", 0), 3), "chg": round(chg, 2),
+                     "why": why or ((a or {}).get("reason") or ""), "ctx": (a or {}).get("reason") or "",
+                     "news": nv.get("top") or [], "long": sl})
+    order = {"قوية": 0, "جيدة": 1, "عادية": 2}
+    recs.sort(key=lambda x: (order[x["grade"]], -abs(x["score"])))
+    data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "every_min": 5,
+            "scanned": len(pick), "analyzed": len(techs), "universe": len(uni), "recs": recs[:REC_MAX],
+            "note": "تحليل آلي للسعر والأخبار وميول المتداولين. ليس نصيحة مالية وبدون ضمان."}
+    log(f"🎯 توصيات: {len(recs)} (قوية {sum(1 for x in recs if x['grade'] == 'قوية')}) من {len(techs)} محلَّل")
+    if PUBLISH_ON:
+        push_file("recs.json", data, REC_BRANCH)
 
 
 def cycle(cap, state):
@@ -949,6 +1121,15 @@ def main():
         raise SystemExit("أضف CAP_API_KEY و CAP_IDENTIFIER و CAP_PASSWORD في GitHub Secrets")
     if E("CAP_ENV") == "live" and not LIVE:
         log("⚠️ CAP_ENV=live لكن بدون LIVE_CONFIRM=I_UNDERSTAND — سأعمل على الحساب التجريبي")
+    if RECS_ONLY:
+        log("🎯 وضع التوصيات فقط — لا صفقات")
+        cap, state = Capital(), load_state()
+        cap.login()
+        try:
+            run_recs(cap, state)
+        finally:
+            save_state(state)
+        return
     unlimited = MAX_OPEN <= 0 or (MAX_DAILY_LOSS_EUR <= 0 and MAX_DAILY_LOSS_PCT <= 0)
     if LIVE and unlimited and not LIVE_NO_LIMITS:
         raise SystemExit("⛔ الحساب الحقيقي بدون حدود (MAX_OPEN=0 أو بلا حد خسارة يومي) يحتاج تأكيداً صريحاً: "

@@ -75,13 +75,14 @@
   .tabs{position:sticky;top:0;z-index:50;display:flex;gap:6px;padding:8px 10px;background:var(--bg);border-bottom:1px solid var(--line)}
   .tabs button{flex:1;background:#2a2f3a;color:var(--txt);padding:10px 8px;font-size:14px}
   .tabs button.on{background:var(--gold);color:#111}
-  #botView{display:none}
-  #botView iframe{display:block;width:100%;height:calc(100vh - 56px);height:calc(100dvh - 56px);border:0;background:var(--bg)}
+  .fv{display:none}
+  .fv iframe{display:block;width:100%;height:calc(100vh - 56px);height:calc(100dvh - 56px);border:0;background:var(--bg)}
 </style>
 </head>
 <body>
-<div class="tabs"><button id="tabSig" class="on">📈 الإشارات</button><button id="tabBot">🤖 البوت</button></div>
-<div id="botView"><iframe id="botFrame" title="لوحة البوت"></iframe></div>
+<div class="tabs"><button id="tabSig" class="on">📈 الإشارات</button><button id="tabRec">🎯 التوصيات</button><button id="tabBot">🤖 البوت</button></div>
+<div id="recView" class="fv"><iframe id="recFrame" title="توصيات الأسواق"></iframe></div>
+<div id="botView" class="fv"><iframe id="botFrame" title="لوحة البوت"></iframe></div>
 <div class="wrap" id="sigView">
   <h1>إشارات الذهب والنفط</h1>
   <div class="mut" id="updated">جاري التحميل…</div>
@@ -520,16 +521,16 @@ setInterval(() => { if ($("aiAuto").checked && Date.now() - (AI?.time || 0) > 30
 
 // ===== التبديل بين الإشارات ولوحة البوت =====
 function showTab(t) {
-  const bot = t === "bot";
-  $("sigView").style.display = bot ? "none" : "";
-  $("botView").style.display = bot ? "block" : "none";
-  $("tabSig").classList.toggle("on", !bot); $("tabBot").classList.toggle("on", bot);
-  if (bot && !$("botFrame").getAttribute("src")) $("botFrame").setAttribute("src", "bot.html");
+  const views = { sig: "sigView", rec: "recView", bot: "botView" }, tabs = { sig: "tabSig", rec: "tabRec", bot: "tabBot" };
+  for (const k in views) { $(views[k]).style.display = k === t ? (k === "sig" ? "" : "block") : "none"; $(tabs[k]).classList.toggle("on", k === t); }
+  const fr = { rec: ["recFrame", "recs.html"], bot: ["botFrame", "bot.html"] }[t];
+  if (fr && !$(fr[0]).getAttribute("src")) $(fr[0]).setAttribute("src", fr[1]);
   store.set("tab", t);
 }
 $("tabSig").onclick = () => showTab("sig");
+$("tabRec").onclick = () => showTab("rec");
 $("tabBot").onclick = () => showTab("bot");
-showTab(store.get("tab", "sig") === "bot" ? "bot" : "sig");
+{ const t0 = store.get("tab", "sig"); showTab(["sig", "rec", "bot"].includes(t0) ? t0 : "sig"); }
 </script>
 </body>
 </html>

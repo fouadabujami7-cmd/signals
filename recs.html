@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12202B">
+<title>توصيات الأسواق</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#EDF1F3;--card:#FFFFFF;--ink:#12202B;--muted:#5C6B77;--line:#D5DDE2;--soft:#F4F7F8;
+  --buy:#0F7B5F;--buy-bg:#DDF1EA;--sell:#B23A2B;--sell-bg:#F7E1DD;--warn:#8A5A00;--warn-bg:#FBEFCB;--accent:#1F4E79}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0E161C;--card:#16222B;--ink:#E6EDF1;--muted:#93A3AF;--line:#26343E;--soft:#1B2933;
+  --buy:#3DC59B;--buy-bg:#123A2F;--sell:#F07A68;--sell-bg:#44201B;--warn:#E8B23C;--warn-bg:#3A2D0E;--accent:#7FB2E5}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;font-size:15px;line-height:1.55;padding-bottom:24px}
+.num{font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate;display:inline-block}
+button{font:inherit;color:inherit}
+.wrap{max-width:560px;margin:0 auto;padding:0 16px}
+header{background:#12202B;color:#E6EDF1;padding:calc(14px + env(safe-area-inset-top,0px)) 0 14px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.top h1{font-size:17px;font-weight:600;margin:0}
+.status{display:flex;align-items:center;gap:7px;font-size:13px;color:#B9C7D1;margin-top:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:#6E7F8B}.dot.ok{background:#3DC59B}.dot.late{background:#E8B23C}.dot.off{background:#F07A68}
+.refresh{background:none;border:1px solid #3A4C59;color:#C9D6DF;border-radius:8px;padding:2px 10px;font-size:12.5px;cursor:pointer}
+.filters{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 8px;border-bottom:1px solid var(--line)}
+.chips{display:flex;gap:7px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chips+.chips{margin-top:7px}
+.fc{flex:0 0 auto;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.fc.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.banner{margin:14px 0 0;padding:11px 13px;border-radius:10px;background:var(--warn-bg);color:var(--warn);font-size:14px}
+.banner.err{background:var(--sell-bg);color:var(--sell)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.name{font-weight:600;font-size:16px;min-width:0;overflow-wrap:anywhere}
+.tag{font-size:12.5px;font-weight:600;border-radius:6px;padding:1px 8px;white-space:nowrap}
+.tag.buy{background:var(--buy-bg);color:var(--buy)}.tag.sell{background:var(--sell-bg);color:var(--sell)}
+.tag.neutral{background:var(--soft);color:var(--muted);border:1px solid var(--line)}.tag.warn{background:var(--warn-bg);color:var(--warn)}
+.dirbig{font-size:20px;font-weight:700;padding:2px 14px;border-radius:8px}
+.dirbig.buy{background:var(--buy-bg);color:var(--buy)}.dirbig.sell{background:var(--sell-bg);color:var(--sell)}
+.sub{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.kv div{background:var(--soft);border-radius:8px;padding:6px 8px}
+.kv span{display:block;font-size:12px;color:var(--muted)}.kv b{font-weight:600;font-size:14px}
+.kv .s b{color:var(--sell)}.kv .t b{color:var(--buy)}
+.ko{margin-top:8px;font-size:13px;color:var(--muted)}
+.why{font-size:13.5px;color:var(--muted);margin-top:8px}
+details summary{cursor:pointer;color:var(--accent);font-size:13px;margin-top:8px;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details ul{margin:6px 0 0;padding:0 18px 0 0;font-size:13.5px}
+.crowd{direction:ltr;display:flex;height:6px;border-radius:3px;overflow:hidden;margin:8px 0 2px}.crowd i{display:block}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;background:var(--card);border:1px dashed var(--line);border-radius:12px;margin-top:14px}
+.note{font-size:12.5px;color:var(--muted);margin:16px 0 0;line-height:1.7}
+.up{color:var(--buy)}.down{color:var(--sell)}
+.chip5{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="top"><h1>🎯 توصيات الأسواق</h1><button class="refresh" id="rf">تحديث</button></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="st">جاري التحميل…</span></div>
+</div></header>
+<div class="wrap">
+  <div class="filters">
+    <div class="chips" id="fType"></div>
+    <div class="chips" id="fDir"></div>
+  </div>
+  <div id="msg"></div>
+  <div id="list"></div>
+  <p class="note" id="note"></p>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const SRC = new URLSearchParams(location.search).get("src") || "https://raw.githubusercontent.com/fouadabujami7-cmd/signals/bot-recs/recs.json";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+let DATA = null, fType = store.get("rType", "الكل"), fDir = store.get("rDir", "الكل"), fGood = store.get("rGood", false);
+const fmt = (v, p) => { if (v == null || isNaN(v)) return "—"; const d = Math.abs(p ?? v) < 10 ? 3 : 2; return Number(v).toFixed(d); };
+
+function chips(el, items, cur, onPick) {
+  $(el).innerHTML = items.map(x => `<button class="fc${x === cur ? " on" : ""}" data-v="${esc(x)}">${esc(x)}</button>`).join("");
+  $(el).querySelectorAll("button").forEach(b => b.onclick = () => onPick(b.dataset.v));
+}
+function drawFilters() {
+  const types = ["الكل", ...Array.from(new Set((DATA?.recs || []).map(r => r.type)))];
+  chips("fType", types, fType, v => { fType = v; store.set("rType", v); render(); });
+  chips("fDir", ["الكل", "شراء", "بيع", fGood ? "✓ القوية والجيدة فقط" : "القوية والجيدة فقط"], fDir === "good" ? "القوية والجيدة فقط" : fDir, v => {
+    if (v.includes("القوية والجيدة")) { fGood = !fGood; store.set("rGood", fGood); }
+    else { fDir = v; store.set("rDir", v); }
+    render();
+  });
+  const dir = $("fDir").querySelectorAll("button"); dir.forEach(b => { b.classList.toggle("on", b.dataset.v === fDir || (fGood && b.dataset.v.includes("القوية"))); });
+}
+function ago(iso) { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m; }
+
+function card(r) {
+  const buy = r.dir === "BUY", cls = buy ? "buy" : "sell";
+  const g = r.grade === "قوية" ? "warn" : "neutral";
+  const long = r.long;
+  return `<div class="card">
+    <div class="row"><div class="name">${esc(r.name)}</div><span class="dirbig ${cls}">${buy ? "شراء" : "بيع"}</span></div>
+    <div class="sub"><span class="tag neutral">${esc(r.type)}</span><span class="tag ${g}">${esc(r.grade)}</span>
+      ${r.kind === "مرتدة" ? '<span class="tag neutral">مرتدة سريعة</span>' : ""}
+      <span class="chip5 num">${esc(r.epic)}</span>
+      <span class="chip5">اتفاق المؤشرات <span class="num">${r.agree}/${r.of}</span></span>
+      ${r.ctx_ok ? '<span class="chip5 up">✓ الأخبار/الميول تؤكد</span>' : ""}</div>
+    <div class="kv"><div><span>السعر الآن</span><b class="num">${fmt(r.price)}</b></div>
+      <div class="s"><span>وقف مقترح</span><b class="num">${fmt(r.stop, r.price)}</b></div>
+      <div class="t"><span>هدف قريب</span><b class="num">${fmt(r.target, r.price)}</b></div></div>
+    <div class="ko">لمنتج KO: ${buy ? "حاجز تحت" : "حاجز فوق"} <b class="num">${fmt(r.ko, r.price)}</b> (أبعد من الوقف). تذبذب الدقيقة <span class="num">${r.atr_pct}%</span> · اليوم <span class="num ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${r.chg}%</span></div>
+    ${r.why ? `<div class="why">${esc(r.why)}</div>` : ""}
+    ${(r.news && r.news.length) || long != null ? `<details><summary>الأخبار وميول المتداولين</summary>
+      ${long != null ? `<div class="crowd"><i style="width:${100 - long}%;background:var(--sell)"></i><i style="width:${long}%;background:var(--buy)"></i></div>
+        <div class="chip5">متداولو Capital.com: <span class="num">${Math.round(long)}%</span> شراء</div>` : ""}
+      ${r.news && r.news.length ? `<ul>${r.news.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}</details>` : ""}
+  </div>`;
+}
+function render() {
+  if (!DATA) return;
+  drawFilters();
+  let rs = DATA.recs || [];
+  if (fType !== "الكل") rs = rs.filter(r => r.type === fType);
+  if (fDir === "شراء") rs = rs.filter(r => r.dir === "BUY"); else if (fDir === "بيع") rs = rs.filter(r => r.dir === "SELL");
+  if (fGood) rs = rs.filter(r => r.grade !== "عادية");
+  $("list").innerHTML = rs.length ? rs.map(card).join("") : `<div class="empty">لا توصيات تطابق هذا الفلتر الآن. الأسواق المغلقة أو الهادئة ما بتظهر. جرّب "الكل".</div>`;
+  $("note").textContent = (DATA.note || "") + ` · حلّلت ${DATA.analyzed} سوقاً من ${DATA.universe}. التوصية إشارة قصيرة المدى (دقائق)، وقد تتغيّر مع كل تحديث.`;
+}
+function status() {
+  if (!DATA) return;
+  const m = ago(DATA.updated), dot = $("dot");
+  dot.className = "dot " + (m < 12 ? "ok" : m < 30 ? "late" : "off");
+  $("st").textContent = (m < 1 ? "آخر تحديث قبل أقل من دقيقة" : `آخر تحديث قبل ${m} د`) + " · يتجدد كل 5 دقائق تقريباً";
+  $("msg").innerHTML = m >= 30 ? `<div class="banner err">التحديث متوقف. تأكد أن Workflow باسم recs شغّال في GitHub Actions.</div>` : "";
+}
+async function load() {
+  try {
+    const r = await fetch(SRC + (SRC.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    DATA = await r.json(); status(); render();
+  } catch (e) {
+    $("st").textContent = "تعذّر التحميل";
+    $("dot").className = "dot off";
+    $("msg").innerHTML = `<div class="banner err">تعذّر قراءة التوصيات (${esc(e.message)}). تأكد أن المستودع عام (Public) وأن Workflow باسم recs اشتغل مرة واحدة على الأقل، ثم اضغط تحديث.</div>`;
+  }
+}
+$("rf").onclick = load;
+load(); setInterval(load, 60000); setInterval(status, 30000);
+</script>
+</body>
+</html>
