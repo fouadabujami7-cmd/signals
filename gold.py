@@ -29,6 +29,21 @@ MIN_SCORE = int(E("G_MIN_SCORE", "35"))
 RELAX_SCORE = int(E("G_RELAX_SCORE", "20"))           # إذا الصفقات أقل من MIN_OPEN يقبل قوة أقل
 RR = TP_EUR / RISK_EUR
 LEVEL_STEP_DEFAULT = 50.0
+MARGIN_EUR = float(E("MARGIN_EUR", "0"))               # هامش كل صفقة (0 = معطّل): قيمة الصفقة = الهامش × الرافعة المتاحة للسوق
+REACH_ATR = float(E("REACH_ATR", "0"))                 # يتجاهل الصفقة إذا الهدف أبعد من هذا العدد من ATR 15 دقيقة (0 = معطّل)
+NEWS_MODE = E("NEWS_MODE", "off")                      # off | boost (يرفع/يخفض القوة) | require (لا يدخل ضد الأخبار)
+NEWS_MIN = float(E("NEWS_MIN", "0.15"))                # أقل قوة خبر تعتبر اتجاهاً
+ALLOW_WEEKEND = E("ALLOW_WEEKEND", "0") == "1"           # السماح بالدخول السبت والأحد (الأسواق المفتوحة فقط، مثل الكريبتو)
+MAX_PER_EPIC = int(E("MAX_PER_EPIC", "0"))             # أقصى صفقات مفتوحة على نفس السوق (1 = صفقة واحدة لكل سهم/سوق)
+MAX_HOLD_MIN = float(E("MAX_HOLD_MIN", "0"))           # أغلق الصفقة إذا مرّ هذا الوقت (0 = بلا إغلاق بالوقت)
+DAILY_LOSS_EUR = float(E("DAILY_LOSS_EUR", "0"))       # بعد هذه الخسارة اليومية يتوقف عن فتح صفقات جديدة (0 = معطّل)
+STREAK_N = int(E("STREAK_N", "0"))                     # بعد هذا العدد من الخسائر المتتالية يتوقف STREAK_PAUSE_MIN دقيقة (0 = معطّل)
+STREAK_PAUSE_MIN = float(E("STREAK_PAUSE_MIN", "30"))
+STOP_FILE = E("STOP_FILE", "STOP.txt")                 # إذا أنشأت ملف بهذا الاسم في المستودع يتوقف البوت عن فتح صفقات جديدة
+MIN_ATR_PCT = float(E("MIN_ATR_PCT", "0"))             # فلتر السرعة: أقل ATR (5 دقائق) كنسبة من السعر
+SPREAD_STOP_FRAC = float(E("SPREAD_STOP_FRAC", "0.4")) # السبريد يجب ألا يتجاوز هذه النسبة من مسافة الوقف
+ONLY_EPICS = [x.strip() for x in E("ONLY_EPICS", "").split(",") if x.strip()]   # قائمة أسواق محددة (فارغ = كل الأسواق)
+GH_REPO = E("GITHUB_REPOSITORY", "")
 SCAN_PER_CYCLE = int(E("SCAN_PER_CYCLE", "24"))        # كم سوق يحلل بكل دورة (يدور على كل الأسواق)
 SPREAD_MAX_PCT = float(E("SPREAD_MAX_PCT", "0.4"))     # يتجاهل الأسواق التي سبريدها أكبر من هذه النسبة
 DISP = dict(NAMES)                                     # رمز السوق -> اسم للعرض
@@ -257,7 +272,7 @@ def session_info(now):
             ah, am = (int(x) for x in a.split(":")); bh, bm = (int(x) for x in b.split(":"))
             if ah * 60 + am <= mins < bh * 60 + bm:
                 blackout = w
-    if wd >= 5:
+    if wd >= 5 and not ALLOW_WEEKEND:
         q, ok = "إغلاق نهاية الأسبوع", False
     elif BEST_FROM <= h < BEST_TO:
         q, ok = "ممتازة (تداخل لندن ونيويورك)", True
@@ -372,11 +387,17 @@ def open_trade(cap, state, s, now, avail=None):
     step = float((rules.get("minSizeIncrement") or {}).get("value") or min_size)
     # قيمة الصفقة من بُعد الوقف الفني (مقيّد 0.25%–1%) بحيث تكون خسارة الوقف ≈ RISK_EUR
     d0 = min(max(abs(price - s["sl"]), 0.0025 * price), 0.01 * price)
-    notional = min(max(RISK_EUR / (d0 / price), MIN_TRADE_EUR), MAX_TRADE_EUR)
+    mf = float(inst.get("marginFactor") or 0)                     # نسبة الهامش % (5 = رافعة 20:1)
+    if MARGIN_EUR and mf > 0:
+        notional = min(MARGIN_EUR * 100 / mf, MAX_TRADE_EUR)      # أكبر رافعة يسمح بها السوق على هذا الهامش
+    else:
+        notional = min(max(RISK_EUR / (d0 / price), MIN_TRADE_EUR), MAX_TRADE_EUR)
     size = round(round(notional * fx / (price * lot) / step) * step, 6)
     size = max(size, min_size)
     size = min(size, float((rules.get("maxDealSize") or {}).get("value") or 1e12))
     value = size * price * lot / fx
+    if MARGIN_EUR and mf > 0 and value * mf / 100 > MARGIN_EUR * 1.3:
+        log(f"{EPIC}: أصغر حجم ({min_size}) يحتاج هامش {value * mf / 100:.0f} € أكبر من {MARGIN_EUR:.0f} — تخطي"); return None
     if value < MIN_TRADE_EUR * 0.9 or value > MAX_TRADE_EUR * 1.5:
         log(f"{EPIC}: قيمة الصفقة {value:.0f} € خارج الحدود (أصغر حجم {min_size}) — تخطي"); return None
     if avail is not None and avail < value * 0.25:
@@ -384,6 +405,12 @@ def open_trade(cap, state, s, now, avail=None):
     dist = RISK_EUR * fx / (size * lot)                          # مسافة تعطي خسارة = RISK_EUR بالضبط
     tdist = TP_EUR * fx / (size * lot)
     mind = bot.min_dist(rules, "minStopOrProfitDistance", price) * 1.1
+    if REACH_ATR and s.get("atr") and tdist > REACH_ATR * s["atr"]:
+        log(f"{EPIC}: الهدف {tdist:.3f} بعيد (>{REACH_ATR:g}×ATR={s['atr']:.3f}) — تخطي"); return None
+    if tdist < spread * 2:
+        log(f"{EPIC}: الهدف أقرب من ضعف السبريد — تخطي"); return None
+    if spread > SPREAD_STOP_FRAC * dist:
+        log(f"{EPIC}: السبريد {spread:.4f} كبير مقارنة بالوقف {dist:.4f} — تخطي"); return None
     if dist < max(spread * 2.5, mind):
         log(f"{EPIC}: وقف {RISK_EUR:.0f} € = {dist:.3f} أضيق من السبريد/الحد الأدنى — تخطي"); return None
     dec = int(snap.get("decimalPlacesFactor") or 2)
@@ -412,6 +439,41 @@ def event(state, **kw):
     state["events"] = (state.get("events", []) + [ev])[-150:]
 
 
+def account(state, pnl):
+    """يحسب ربح/خسارة اليوم والخسائر المتتالية"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    d = state.setdefault("day", {})
+    if d.get("date") != today:
+        d.clear(); d["date"] = today; d["pnl"] = 0.0
+    d["pnl"] = round(d["pnl"] + pnl, 2)
+    if pnl < 0:
+        state["streak"] = state.get("streak", 0) + 1
+        if STREAK_N and state["streak"] >= STREAK_N:
+            state["pause_until"] = time.time() + STREAK_PAUSE_MIN * 60
+            state["streak"] = 0
+    elif pnl > 0:
+        state["streak"] = 0
+
+
+def gate(cap, state):
+    """هل مسموح فتح صفقات جديدة الآن؟ يرجع سبب المنع أو None"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    d = state.get("day") or {}
+    if DAILY_LOSS_EUR and d.get("date") == today and d.get("pnl", 0) <= -DAILY_LOSS_EUR:
+        return f"وصلت الخسارة اليومية {d['pnl']:.0f} € (الحد {DAILY_LOSS_EUR:.0f}) — متوقف لباقي اليوم"
+    if state.get("pause_until", 0) > time.time():
+        return f"{STREAK_N} خسائر متتالية — استراحة حتى {datetime.fromtimestamp(state['pause_until'], timezone.utc).strftime('%H:%M')} غرينتش"
+    if GH_REPO and STOP_FILE:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"https://raw.githubusercontent.com/{GH_REPO}/main/{STOP_FILE}?t={int(time.time())}", timeout=10) as r:
+                if r.status == 200:
+                    return f"زر الإيقاف: وُجد ملف {STOP_FILE} في المستودع"
+        except Exception:
+            pass                                          # 404 = لا يوجد ملف إيقاف
+    return None
+
+
 def manage(cap, state, positions):
     """يتتبّع صفقاتنا ويسجّل الإغلاقات؛ التأمين اختياري (BE_AT_R>0)"""
     trades = state.setdefault("trades", {})
@@ -424,8 +486,11 @@ def manage(cap, state, positions):
             pnl = TP_EUR if hit_tp else -RISK_EUR
             if tr.get("be"):
                 pnl = 0
+            if tr.get("forced") is not None:
+                pnl = tr["forced"]; hit_tp = pnl > 0
+            account(state, pnl)
             event(state, type="close", market=tr.get("name"), dir=tr["dir"], strategy=STRAT.get(tr["strategy"]), price=last, pnl=round(pnl, 2),
-                  why="أُغلقت عند الهدف ✅" if hit_tp and not tr.get("be") else ("أُغلقت عند الوقف" if not tr.get("be") else "أُغلقت عند الدخول (مؤمّنة)"))
+                  why="⏱ أُغلقت بالوقت" if tr.get("forced") is not None else "أُغلقت عند الهدف ✅" if hit_tp and not tr.get("be") else ("أُغلقت عند الوقف" if not tr.get("be") else "أُغلقت عند الدخول (مؤمّنة)"))
             log(f"{tr.get('name')}: أُغلقت صفقة {tr['dir']} ≈ {pnl:+.0f} €")
             del trades[did]
             continue
@@ -434,6 +499,16 @@ def manage(cap, state, positions):
         now_p = float(mk["bid"] if buy else mk["offer"])
         lvl = float(pos["level"])
         tr["last_price"], tr["upl"] = now_p, float(pos.get("upl") or 0)
+        if MAX_HOLD_MIN and tr.get("t"):
+            age = (datetime.now(timezone.utc) - parse_t(tr["t"])).total_seconds() / 60
+            if age >= MAX_HOLD_MIN and not DRY_RUN:
+                try:
+                    cap.call("DELETE", f"/positions/{pos['dealId']}")
+                    tr["forced"] = round(tr["upl"] / (tr.get("fx") or 1.08), 2)
+                    log(f"{tr.get('name')}: ⏱ أُغلقت بعد {age:.0f} د ({tr['forced']:+.2f} €)")
+                    continue
+                except Exception as e:
+                    log("تعذّر الإغلاق بالوقت:", str(e)[:100])
         if BE_AT_R and not tr.get("be") and pos.get("stopLevel") is not None:
             dist = abs(lvl - tr["sl"])
             gain = (now_p - lvl) if buy else (lvl - now_p)
@@ -532,6 +607,10 @@ def cycle(cap, state, now, ctx):
         except Exception as e:
             log(f"{name}: تعذّر التحليل:", str(e)[:120])
     n_open = len(mine)
+    halt = gate(cap, state)
+    if halt:
+        log("⛔ " + halt)
+    state["halt"] = halt
     MIN_SCORE_NOW[0] = RELAX_SCORE if n_open < MIN_OPEN else MIN_SCORE
     cands = []
     for ev in evs:                                    # إعادة التقييم بالحد الحالي (نخفّفه إذا الصفقات أقل من المطلوب)
@@ -545,8 +624,10 @@ def cycle(cap, state, now, ctx):
     seen = state.setdefault("seen", {})
     cool = state.setdefault("cool", {})
     for score, ev, s in cands:
-        if opened >= G_MAX_NEW or (G_MAX_OPEN and n_open + opened >= G_MAX_OPEN):
+        if halt or opened >= G_MAX_NEW or (G_MAX_OPEN and n_open + opened >= G_MAX_OPEN):
             break
+        if MIN_ATR_PCT and (ev["S"]["a"][-1] or 0) / ev["price"] * 100 < MIN_ATR_PCT:
+            continue                                      # السوق بطيء الآن
         name, ep = ev["name"], ev["ep"]
 
         def block(why):
@@ -562,12 +643,32 @@ def cycle(cap, state, now, ctx):
         if time.time() - cool.get(key, 0) < COOLDOWN_MIN * 60:
             block(f"نفس الإشارة قبل أقل من {COOLDOWN_MIN:g} د"); continue
         same = [p for p in mine if p["market"]["epic"] == ep]
+        if MAX_PER_EPIC and len(same) >= MAX_PER_EPIC:
+            block(f"في صفقة مفتوحة على هذا السوق (الحد {MAX_PER_EPIC})"); continue
         if any((1 if p["position"]["direction"] == "BUY" else -1) != s["dir"] for p in same):
             block("في صفقة معاكسة مفتوحة على نفس السوق"); continue
         atr = ev["M"]["a"][-1] or 1
         if any(abs(ev["price"] - float(p["position"]["level"])) < 0.4 * atr for p in same):
             block("في صفقة قريبة من هذا السعر"); continue
         EPIC, LEVEL_STEP = ep, ev["step"]
+        s["atr"] = ev["M"]["a"][-1]
+        news = None
+        if NEWS_MODE != "off":
+            if ep not in bot.NEWS_QUERY and ctx["uni"].get(ep, {}).get("t") not in (None, "SHARES"):
+                bot.NEWS_QUERY[ep] = f"{bot._clean_name(DISP.get(name, name))} price"
+            news = bot.news_view(state, ep, DISP.get(name, name))
+            if news.get("block"):
+                block("خبر خطير على هذا السوق — تخطي"); continue
+            ns = news.get("score", 0)
+            against = (ns * s["dir"]) < -NEWS_MIN
+            if against and NEWS_MODE == "require":
+                block(f"الأخبار ضد الاتجاه ({ns:+.2f}) — تخطي"); continue
+            if NEWS_MODE == "require" and abs(ns) < NEWS_MIN and not news.get("n"):
+                pass                                      # لا أخبار: لا نمنع
+            if (ns * s["dir"]) > NEWS_MIN:
+                s["score"] += 15; s["why"] += f" + الأخبار تؤيد ({ns:+.2f})"
+            elif against:
+                s["score"] -= 15
         res = open_trade(cap, state, s, now, avail)
         seen[key] = stamp
         if res:
@@ -580,7 +681,7 @@ def cycle(cap, state, now, ctx):
                                       "stopLevel": res["stop"], "profitLevel": res["target"], "upl": 0},
                          "market": {"epic": ep, "bid": res["price"], "offer": res["price"]}})
             event(state, type="open", market=DISP.get(name, name), dir="BUY" if s["dir"] > 0 else "SELL", strategy=STRAT[s["strategy"]], price=res["price"], size=res["size"],
-                  value_eur=round(res["value"]), stop=res["stop"], target=res["target"], risk=RISK_EUR, score=s["score"], pattern=s["pattern"], why=s["why"])
+                  value_eur=round(res["value"]), stop=res["stop"], target=res["target"], risk=RISK_EUR, score=s["score"], pattern=s["pattern"], why=s["why"], news=(news or {}).get("top"))
     an = [{"name": DISP.get(ev["name"], ev["name"]), "epic": ev["ep"], "price": round(ev["price"], 4), "h1": ev["h1"], "m15": ev["m15"],
                           "sess": ev["sess"], "status": ev["status"], "tf": [tf_view(ev["H"], "الساعة"), tf_view(ev["M"], "15 دقيقة"), tf_view(ev["S"], "5 دقائق")]} for ev in evs]
     held = {p["market"]["epic"] for p in mine}
@@ -603,7 +704,7 @@ def publish(cap, state, bal, mine, fx, now, n_open):
     data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "demo", "balance": round(bal, 2),
             "day_pnl": round(realized + sum(o["pnl"] for o in open_v), 2), "open": open_v, "history": hist,
             "analysis": state.get("analysis"), "events": state.get("events", [])[::-1][:80], "log": list(bot.LOG_BUF)[-50:],
-            "settings": {"min_trade_eur": MIN_TRADE_EUR, "risk_eur": RISK_EUR, "tp_eur": TP_EUR, "min_open": MIN_OPEN, "max_open": G_MAX_OPEN,
+            "halt": state.get("halt"), "day": state.get("day"), "settings": {"hold_min": MAX_HOLD_MIN, "daily_loss": DAILY_LOSS_EUR, "min_trade_eur": MIN_TRADE_EUR, "risk_eur": RISK_EUR, "tp_eur": TP_EUR, "min_open": MIN_OPEN, "max_open": G_MAX_OPEN,
                          "min_score": MIN_SCORE, "relax_score": RELAX_SCORE, "markets": [f"كل الأسواق ({state.get('scan_total', 0)})"],
                          "news_blackout": NEWS_BLACKOUT, "open_now": n_open}}
     if bot.PUBLISH_ON:
@@ -621,6 +722,9 @@ def main():
     cap.login()
     uni = bot.build_rec_universe(cap, state)
     bot.save_state(state)
+    if ONLY_EPICS:
+        uni = {e: v for e, v in uni.items() if e in set(ONLY_EPICS)}
+        log(f"🎯 قائمة محددة: {', '.join(uni)}")
     if not uni:                                        # لو فشل قراءة القوائم: الأسواق الأساسية فقط
         log("⚠️ تعذّر قراءة كل الأسواق، أكتفي بالذهب والنفط والفضة والدولار")
         uni = {ep: {"n": DISP.get(n, n), "t": "OTHER"} for n, ep in resolve_markets(cap).items()}
