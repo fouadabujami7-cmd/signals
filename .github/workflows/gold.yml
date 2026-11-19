@@ -32,17 +32,20 @@ jobs:
           CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
           STATE_FILE: "gold_state.json"
           LOOP_MINUTES: "14"
-          CYCLE_SECONDS: "45"
-          MARKETS: "GOLD,OIL_CRUDE,SILVER,DOLLAR"   # الذهب والنفط والفضة والدولار
+          CYCLE_SECONDS: "20"
+          SCAN_PER_CYCLE: "24"         # كم سوق يحلل كل دورة (يدور على كل أسواق كابيتال)
+          REC_NODE_CALLS: "60"         # عدد طلبات قراءة قائمة الأسواق (مرة كل 24 ساعة)
+          SPREAD_MAX_PCT: "0.4"        # يتجاهل الأسواق ذات السبريد الكبير
+          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
           TRADE_EUR: "500"             # أقل قيمة للصفقة
           MAX_TRADE_EUR: "8000"        # أعلى قيمة (لازم تكبر الصفقة ليكون وقف 50€ منطقي)
           RISK_EUR: "50"               # وقف الخسارة = 50 يورو
           TP_EUR: "50"                 # الهدف = 50 يورو
-          MIN_OPEN: "5"                # يحاول إبقاء 5 صفقات أو أكثر معاً
-          G_MAX_OPEN: "12"
-          G_MAX_NEW: "4"
+          MIN_OPEN: "10"               # يحاول إبقاء 10 صفقات أو أكثر معاً
+          G_MAX_OPEN: "20"
+          G_MAX_NEW: "5"
           G_MIN_SCORE: "35"
-          G_RELAX_SCORE: "20"          # إذا الصفقات أقل من 5 يدخل مع الاتجاه مباشرة
+          G_RELAX_SCORE: "20"          # إذا الصفقات أقل من 10 يدخل مع الاتجاه مباشرة
           G_COOLDOWN_MIN: "5"
           BE_AT_R: "0"                 # بدون تأمين: وقف وهدف ثابتان
           SESSION_GMT: "0-24"          # طول الوقت (ما عدا عطلة السوق ووقت الأخبار)
