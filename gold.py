@@ -28,6 +28,9 @@ G_MAX_NEW = int(E("G_MAX_NEW", "5"))                  # أقصى صفقات جد
 MIN_SCORE = int(E("G_MIN_SCORE", "35"))
 RELAX_SCORE = int(E("G_RELAX_SCORE", "20"))           # إذا الصفقات أقل من MIN_OPEN يقبل قوة أقل
 RR = TP_EUR / RISK_EUR
+NO_TP = E("NO_TP", "0") == "1"                         # 1 = بلا هدف ربح ثابت (الصفقة تكمل حتى يضربها الوقف المتحرّك)
+LADDER_STEP = float(E("LADDER_STEP", "0"))             # كل كم يورو ربح يرتفع مستوى الوقف (0 = معطّل)
+LADDER_LOCK = float(E("LADDER_LOCK", "0.6"))           # نسبة الربح المقفلة: ربح 5 → وقف عند +3، 10 → +6، 15 → +9 ...
 LEVEL_STEP_DEFAULT = 50.0
 MARGIN_EUR = float(E("MARGIN_EUR", "0"))               # هامش كل صفقة (0 = معطّل): قيمة الصفقة = الهامش × الرافعة المتاحة للسوق
 MARGIN_MIN = float(E("MARGIN_MIN", "0"))                # أقل هامش مقبول للصفقة (0 = بلا حد أدنى)
@@ -423,10 +426,12 @@ def open_trade(cap, state, s, now, avail=None):
     dec = int(snap.get("decimalPlacesFactor") or 2)
     stop = round(price - dist if buy else price + dist, dec)
     target = round(price + tdist if buy else price - tdist, dec)
-    log(f"{EPIC}: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} (-{RISK_EUR:.0f}€) | هدف {target} (+{TP_EUR:.0f}€) | {s['why']}")
+    log(f"{EPIC}: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} (-{RISK_EUR:.0f}€) | {('هدف ' + str(target) + ' (+' + format(TP_EUR, '.0f') + '€)') if not NO_TP else 'بلا هدف: وقف متحرّك'} | {s['why']}")
     if DRY_RUN:
-        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR, "fx": fx}
-    order = {"epic": EPIC, "direction": "BUY" if buy else "SELL", "size": size, "stopLevel": stop, "profitLevel": target, "guaranteedStop": False}
+        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
+    order = {"epic": EPIC, "direction": "BUY" if buy else "SELL", "size": size, "stopLevel": stop, "guaranteedStop": False}
+    if not NO_TP:
+        order["profitLevel"] = target
     try:
         ref = cap.call("POST", "/positions", order).get("dealReference")
         time.sleep(1)
@@ -438,7 +443,7 @@ def open_trade(cap, state, s, now, avail=None):
         return None
     ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
     ids = [i for i in dict.fromkeys(ids) if i]
-    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR, "fx": fx}
+    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
 
 
 def event(state, **kw):
@@ -506,6 +511,46 @@ def reconcile(state, allpos):
             taken.add(match)
 
 
+def ladder(cap, state, tr, pos, mk, buy, now_p, lvl):
+    """سلّم الوقف: ربح n×STEP → الوقف يُقفل عند n×STEP×LOCK (5→3، 10→6، 15→9 ...) ولا يتراجع أبداً"""
+    fx = tr.get("fx") or 1.08
+    pnl = float(pos.get("upl") or 0) / fx
+    n = int(pnl // LADDER_STEP)
+    if n < 1 or n <= tr.get("lad", 0):
+        return
+    size = float(pos["size"])
+    lot = tr.get("lot")
+    if not lot:
+        gain = (now_p - lvl) if buy else (lvl - now_p)
+        if gain <= 0 or not float(pos.get("upl") or 0): return
+        lot = float(pos["upl"]) / (gain * size)
+    lock = n * LADDER_STEP * LADDER_LOCK
+    dist = lock * fx / (size * lot)
+    want = lvl + dist if buy else lvl - dist
+    m = cap.call("GET", f"/markets/{tr['epic']}")
+    mind = bot.min_dist(m.get("dealingRules", {}), "minStopOrProfitDistance", now_p) * 1.1
+    limit = now_p - mind if buy else now_p + mind          # أقرب مستوى مسموح للوقف من السعر الحالي
+    new = min(want, limit) if buy else max(want, limit)
+    txt = str(mk.get("bid"))
+    dec = max(len(txt.split(".")[1]) if "." in txt else 0, 2)
+    new = round(new, dec)
+    cur = pos.get("stopLevel")
+    tick = 10 ** -dec
+    if cur is not None and ((buy and new <= float(cur) + tick / 2) or ((not buy) and new >= float(cur) - tick / 2)):
+        return                                              # لا تحسّن عن الوقف الحالي
+    if not DRY_RUN:
+        body = {"stopLevel": new}
+        if pos.get("profitLevel") is not None:
+            body["profitLevel"] = float(pos["profitLevel"])
+        cap.call("PUT", f"/positions/{pos['dealId']}", body)
+    reached = (new >= round(want, dec) - tick / 2) if buy else (new <= round(want, dec) + tick / 2)
+    if reached:
+        tr["lad"] = n
+    event(state, type="secure", market=tr.get("name"), dir=pos["direction"], price=new,
+          why=f"الربح ≈ +{pnl:.1f}€ → الوقف عند ربح +{lock:.0f}€" + ("" if reached else " (أقرب مستوى مسموح الآن، سيُحدَّث لاحقاً)"))
+    log(f"{tr.get('name')}: 🔒 الربح ≈ {pnl:+.1f}€ → وقف عند {new} (يضمن ≈ +{lock:.0f}€){'' if reached else ' [مؤقت]'}")
+
+
 def manage(cap, state, positions):
     """يتتبّع صفقاتنا ويسجّل الإغلاقات؛ التأمين اختياري (BE_AT_R>0)"""
     trades = state.setdefault("trades", {})
@@ -558,6 +603,11 @@ def manage(cap, state, positions):
                     except Exception as e:
                         log("تعذّر التأمين:", e); continue
                 event(state, type="secure", market=tr.get("name"), dir=pos["direction"], price=new_stop, why="نقل الوقف لسعر الدخول")
+        if LADDER_STEP > 0:
+            try:
+                ladder(cap, state, tr, pos, mk, buy, now_p, lvl)
+            except Exception as e:
+                log("تعذّر تحريك الوقف:", str(e)[:120])
 
 
 def view_open(state, positions, fx):
@@ -722,7 +772,7 @@ def cycle(cap, state, now, ctx):
             avail -= res["value"] * 0.25
             cool[key] = time.time()
             trades[res["id"]] = {"ids": res.get("ids") or [res["id"]], "size0": res["size"], "fx": res.get("fx"), "name": DISP.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
-                                 "sl": res["stop"], "tp": res["target"], "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
+                                 "sl": res["stop"], "tp": res["target"], "lot": res.get("lot"), "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
             book.append({"position": {"direction": "BUY" if s["dir"] > 0 else "SELL", "level": res["price"]}, "market": {"epic": ep}})
             mine.append({"position": {"dealId": res["id"], "direction": "BUY" if s["dir"] > 0 else "SELL", "level": res["price"], "size": res["size"],
                                       "stopLevel": res["stop"], "profitLevel": res["target"], "upl": 0},
