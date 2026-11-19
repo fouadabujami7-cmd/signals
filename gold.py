@@ -12,25 +12,34 @@ import bot
 from bot import log
 
 E = os.environ.get
-EPIC = E("GOLD_EPIC", "GOLD")
-TRADE_EUR = float(E("TRADE_EUR", "500"))             # قيمة كل صفقة (الحجم × السعر) باليورو
-G_MAX_OPEN = int(E("G_MAX_OPEN", "5"))                # أقصى صفقات مفتوحة معاً (0 = بلا حد)
-G_MAX_NEW = int(E("G_MAX_NEW", "2"))                  # أقصى صفقات جديدة في الدورة الواحدة
-RR = float(E("G_RR", "2"))                            # الهدف = الوقف × RR
-MIN_SCORE = int(E("G_MIN_SCORE", "60"))
-LEVEL_STEP = float(E("LEVEL_STEP", "50"))             # المستويات المدوّرة كل كم دولار
-BE_AT_R = float(E("BE_AT_R", "1"))                    # نقل الوقف لنقطة الدخول عند ربح = هذا × مسافة الوقف (0 = معطّل)
-SESSION_FROM, SESSION_TO = (int(x) for x in E("SESSION_GMT", "7-20").split("-"))   # ساعات السماح بالدخول (غرينتش)
-BEST_FROM, BEST_TO = (int(x) for x in E("BEST_GMT", "13-17").split("-"))           # أنشط وقت (تداخل لندن ونيويورك)
-NEWS_BLACKOUT = [x.strip() for x in E("NEWS_BLACKOUT", "13:15-13:45,15:00-15:15").split(",") if x.strip()]   # لا دخول (غرينتش، أيام العمل)
-COOLDOWN_MIN = float(E("G_COOLDOWN_MIN", "20"))       # نفس الاستراتيجية والاتجاه لا تتكرر قبل هذا
-MAX_RISK_EUR = float(E("G_MAX_RISK_EUR", "100"))      # سقف خسارة الصفقة الواحدة (أمان)
+EPIC = "GOLD"                                           # السوق الحالي (يتبدّل في الحلقة)
+MARKETS = [x.strip() for x in E("MARKETS", "GOLD,OIL_CRUDE,SILVER,DOLLAR").split(",") if x.strip()]
+CANDS = {"DOLLAR": ["DXY", "USDOLLAR", "EURUSD"], "OIL_CRUDE": ["OIL_CRUDE", "CRUDE_OIL"]}   # أسماء بديلة إذا الاسم الأول غير موجود
+STEPS = {"GOLD": 50.0, "SILVER": 1.0, "OIL_CRUDE": 1.0, "DOLLAR": 0.5}                         # المستويات المدوّرة لكل سوق
+LEVEL_STEP = 50.0
+NAMES = {"GOLD": "الذهب", "SILVER": "الفضة", "OIL_CRUDE": "النفط", "DOLLAR": "الدولار"}
+RISK_EUR = float(E("RISK_EUR", "50"))                 # الوقف = خسارة بهذا المبلغ (يورو)
+TP_EUR = float(E("TP_EUR", "50"))                     # الهدف = ربح بهذا المبلغ (يورو)
+MIN_TRADE_EUR = float(E("TRADE_EUR", "500"))          # أقل قيمة للصفقة
+MAX_TRADE_EUR = float(E("MAX_TRADE_EUR", "8000"))     # أعلى قيمة للصفقة
+MIN_OPEN = int(E("MIN_OPEN", "5"))                    # يحاول إبقاء هذا العدد من الصفقات مفتوحاً
+G_MAX_OPEN = int(E("G_MAX_OPEN", "12"))               # سقف الصفقات المفتوحة (0 = بلا حد)
+G_MAX_NEW = int(E("G_MAX_NEW", "4"))                  # أقصى صفقات جديدة بالدورة
+MIN_SCORE = int(E("G_MIN_SCORE", "35"))
+RELAX_SCORE = int(E("G_RELAX_SCORE", "20"))           # إذا الصفقات أقل من MIN_OPEN يقبل قوة أقل
+RR = TP_EUR / RISK_EUR
+LEVEL_STEP_DEFAULT = 50.0
+BE_AT_R = float(E("BE_AT_R", "0"))                    # 0 = بلا تأمين: الهدف والوقف ثابتان 50/50
+SESSION_FROM, SESSION_TO = (int(x) for x in E("SESSION_GMT", "0-24").split("-"))
+BEST_FROM, BEST_TO = (int(x) for x in E("BEST_GMT", "13-17").split("-"))
+NEWS_BLACKOUT = [x.strip() for x in E("NEWS_BLACKOUT", "13:25-13:40,14:55-15:10").split(",") if x.strip()]
+COOLDOWN_MIN = float(E("G_COOLDOWN_MIN", "5"))
 LOOP_MINUTES = float(E("LOOP_MINUTES", "14"))
 CYCLE_SECONDS = float(E("CYCLE_SECONDS", "45"))
 GOLD_BRANCH = E("GOLD_BRANCH", "gold-data")
 STATE_FILE = E("STATE_FILE", "gold_state.json")
 DRY_RUN = E("DRY_RUN", "0") == "1"
-STRAT = {"bounce": "ارتداد من مستوى", "retest": "كسر وإعادة اختبار", "pullback": "تراجع داخل الاتجاه", "asia": "كسر كاذب لنطاق آسيا"}
+STRAT = {"trend": "اتجاه مؤكد", "bounce": "ارتداد من مستوى", "retest": "كسر وإعادة اختبار", "pullback": "تراجع داخل الاتجاه", "asia": "كسر كاذب لنطاق آسيا"}
 
 
 # ===== بيانات =====
@@ -71,9 +80,9 @@ def dir_m15(P):
     i = len(P["c"]) - 1
     if i < 30:
         return 0
-    if P["e9"][i] > P["e21"][i] and 45 < P["r"][i] < 72:
+    if P["e9"][i] > P["e21"][i] and 40 < P["r"][i] < 82:
         return 1
-    if P["e9"][i] < P["e21"][i] and 28 < P["r"][i] < 55:
+    if P["e9"][i] < P["e21"][i] and 18 < P["r"][i] < 60:
         return -1
     return 0
 
@@ -212,6 +221,27 @@ def s_asia(H, M, S, h1, m15, now):
     return None, f"نطاق آسيا {lo:.1f}–{hi:.1f}: لا كسر كاذب"
 
 
+def s_trend(H, M, S, h1, m15):
+    """اتجاه الساعة و15 دقيقة متفقان + 5 دقائق بنفس الاتجاه وشمعة بنفس الاتجاه: دخول مباشر بلا تردد"""
+    i = len(S["c"]) - 1
+    if i < 40 or not S["a"][i]:
+        return None, "بيانات 5 دقائق غير كافية"
+    d = h1 if h1 else m15
+    if d == 0 or (m15 and m15 != d):
+        return None, "لا اتجاه واضح على الساعة/15 دقيقة"
+    cs, a = S["cs"], S["a"][i]
+    aligned = S["e9"][i] > S["e21"][i] if d > 0 else S["e9"][i] < S["e21"][i]
+    candle = cs[i]["c"] > cs[i]["o"] if d > 0 else cs[i]["c"] < cs[i]["o"]
+    relaxed = MIN_SCORE_NOW[0] < MIN_SCORE            # أقل من العدد المطلوب من الصفقات: لا تردد، ادخل مع الاتجاه
+    if not relaxed and (not aligned or not candle):
+        return None, "5 دقائق لا تؤكد الاتجاه بعد"
+    if not relaxed and ((d > 0 and S["r"][i] > 88) or (d < 0 and S["r"][i] < 12)):
+        return None, "السعر متمدد (RSI متطرف)"
+    look = cs[i - 5:i + 1]
+    sl = min(x["l"] for x in look) - 0.2 * a if d > 0 else max(x["h"] for x in look) + 0.2 * a
+    return sig("trend", d, sl, "الاتجاه متفق على الفريمات" + ("" if not relaxed else " (دخول مباشر: الصفقات أقل من المطلوب)"), None, None, 0), ""
+
+
 # ===== الجلسة والأخبار =====
 def session_info(now):
     h, wd = now.hour, now.weekday()
@@ -235,11 +265,14 @@ def session_info(now):
 
 
 # ===== التقييم =====
+MIN_SCORE_NOW = [MIN_SCORE]
+
+
 def evaluate(H, M, S, now):
     h1, m15 = trend_h1(H), dir_m15(M)
     sess = session_info(now)
     out, status = [], []
-    for key, fn in (("bounce", s_bounce), ("retest", s_retest), ("pullback", s_pullback), ("asia", None)):
+    for key, fn in (("trend", s_trend), ("bounce", s_bounce), ("retest", s_retest), ("pullback", s_pullback), ("asia", None)):
         s, why = (s_asia(H, M, S, h1, m15, now) if key == "asia" else fn(H, M, S, h1, m15))
         if s:
             score = 50 + (15 if h1 == s["dir"] else 0 if h1 == 0 else -30) + (10 if m15 == s["dir"] else 0) + (10 if s["pattern"] else 0) + s["bonus"] + (10 if sess["best"] else 0)
@@ -247,8 +280,8 @@ def evaluate(H, M, S, now):
             if (s["dir"] > 0 and M["r"][i15] > 75) or (s["dir"] < 0 and M["r"][i15] < 25):
                 score -= 10
             s["score"] = score
-            if score < MIN_SCORE:
-                status.append({"id": key, "name": STRAT[key], "state": "weak", "text": f"إشارة {'شراء' if s['dir'] > 0 else 'بيع'} لكن القوة {score} < {MIN_SCORE}: {s['why']}"})
+            if score < MIN_SCORE_NOW[0]:
+                status.append({"id": key, "name": STRAT[key], "state": "weak", "text": f"إشارة {'شراء' if s['dir'] > 0 else 'بيع'} لكن القوة {score} < {MIN_SCORE_NOW[0]}: {s['why']}"})
             else:
                 status.append({"id": key, "name": STRAT[key], "state": "signal", "text": f"{'شراء' if s['dir'] > 0 else 'بيع'} ({score}): {s['why']}"})
                 out.append(s)
@@ -267,7 +300,27 @@ def tf_view(P, name):
             "t": P["cs"][i]["t"].strftime("%H:%M")}
 
 
+
+
 # ===== التنفيذ =====
+def resolve_markets(cap):
+    """يحوّل الأسماء (الذهب/النفط/الفضة/الدولار) لرموز كابيتال الفعلية"""
+    out = {}
+    for name in MARKETS:
+        for ep in CANDS.get(name, [name]):
+            try:
+                m = cap.call("GET", f"/markets/{ep}")
+                if m.get("snapshot"):
+                    out[name] = ep
+                    log(f"✓ {NAMES.get(name, name)} = {ep}")
+                    break
+            except Exception:
+                continue
+        else:
+            log(f"⚠️ ما لقيت سوق لـ {name} (جرّبت {CANDS.get(name, [name])}) — تخطي")
+    return out
+
+
 def eurusd(cap):
     try:
         s = cap.call("GET", "/markets/EURUSD").get("snapshot", {})
@@ -281,44 +334,47 @@ def open_trade(cap, state, s, now, fx):
     m = cap.call("GET", f"/markets/{EPIC}")
     snap, rules, inst = m.get("snapshot", {}), m.get("dealingRules", {}), m.get("instrument", {})
     if snap.get("marketStatus") != "TRADEABLE":
-        log("الذهب: السوق مغلق"); return None
+        log(f"{EPIC}: السوق مغلق"); return None
     buy = s["dir"] > 0
     bid, ask = float(snap["bid"]), float(snap["offer"])
     price = ask if buy else bid
     spread = ask - bid
-    dist = abs(price - s["sl"])
-    dist = max(dist, spread * 3, bot.min_dist(rules, "minStopOrProfitDistance", price) * 1.1)
     lot = float(inst.get("lotSize") or 1)
     min_size = float(rules["minDealSize"]["value"])
     step = float((rules.get("minSizeIncrement") or {}).get("value") or min_size)
-    size = round(round(TRADE_EUR * fx / (price * lot) / step) * step, 6)
+    # قيمة الصفقة من بُعد الوقف الفني (مقيّد 0.25%–1%) بحيث تكون خسارة الوقف ≈ RISK_EUR
+    d0 = min(max(abs(price - s["sl"]), 0.0025 * price), 0.01 * price)
+    notional = min(max(RISK_EUR / (d0 / price), MIN_TRADE_EUR), MAX_TRADE_EUR)
+    size = round(round(notional * fx / (price * lot) / step) * step, 6)
     size = max(size, min_size)
     size = min(size, float((rules.get("maxDealSize") or {}).get("value") or 1e12))
     value = size * price * lot / fx
-    if value > TRADE_EUR * 1.5:
-        log(f"الذهب: أصغر حجم ({min_size}) قيمته {value:.0f} € أكبر بكثير من {TRADE_EUR:.0f} — تخطي"); return None
-    risk_eur = size * dist * lot / fx
-    if MAX_RISK_EUR and risk_eur > MAX_RISK_EUR:
-        log(f"الذهب: خطر الصفقة {risk_eur:.1f} € أكبر من الحد {MAX_RISK_EUR:.0f} — تخطي"); return None
+    if value < MIN_TRADE_EUR * 0.9 or value > MAX_TRADE_EUR * 1.5:
+        log(f"{EPIC}: قيمة الصفقة {value:.0f} € خارج الحدود (أصغر حجم {min_size}) — تخطي"); return None
+    dist = RISK_EUR * fx / (size * lot)                          # مسافة تعطي خسارة = RISK_EUR بالضبط
+    tdist = TP_EUR * fx / (size * lot)
+    mind = bot.min_dist(rules, "minStopOrProfitDistance", price) * 1.1
+    if dist < max(spread * 2.5, mind):
+        log(f"{EPIC}: وقف {RISK_EUR:.0f} € = {dist:.3f} أضيق من السبريد/الحد الأدنى — تخطي"); return None
     dec = int(snap.get("decimalPlacesFactor") or 2)
     stop = round(price - dist if buy else price + dist, dec)
-    target = round(price + dist * RR if buy else price - dist * RR, dec)
-    log(f"الذهب: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} | هدف {target} | خطر ≈{risk_eur:.1f} € | {s['why']}")
+    target = round(price + tdist if buy else price - tdist, dec)
+    log(f"{EPIC}: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} (-{RISK_EUR:.0f}€) | هدف {target} (+{TP_EUR:.0f}€) | {s['why']}")
     if DRY_RUN:
-        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": risk_eur}
+        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR}
     order = {"epic": EPIC, "direction": "BUY" if buy else "SELL", "size": size, "stopLevel": stop, "profitLevel": target, "guaranteedStop": False}
     try:
         ref = cap.call("POST", "/positions", order).get("dealReference")
         time.sleep(1)
         c = cap.call("GET", f"/confirms/{ref}")
     except Exception as e:
-        log("الذهب: رفض الطلب:", e); return None
-    log(f"الذهب: {c.get('dealStatus')} {c.get('reason', '')}")
+        log(f"{EPIC}: رفض الطلب:", e); return None
+    log(f"{EPIC}: {c.get('dealStatus')} {c.get('reason', '')}")
     if c.get("dealStatus") != "ACCEPTED":
         return None
     ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
     ids = [i for i in dict.fromkeys(ids) if i]
-    return {"id": ids[0] if ids else ref, "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": risk_eur}
+    return {"id": ids[0] if ids else ref, "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR}
 
 
 def event(state, **kw):
@@ -327,17 +383,20 @@ def event(state, **kw):
 
 
 def manage(cap, state, positions):
-    """يتتبّع صفقاتنا: تأمين عند ربح BE_AT_R، وتسجيل الإغلاقات"""
+    """يتتبّع صفقاتنا ويسجّل الإغلاقات؛ التأمين اختياري (BE_AT_R>0)"""
     trades = state.setdefault("trades", {})
     live = {p["position"]["dealId"]: p for p in positions}
     for did, tr in list(trades.items()):
         p = live.get(did)
         if not p:
-            d = 1 if tr["dir"] == "BUY" else -1
             last = tr.get("last_price") or tr["entry"]
-            reason = "هدف" if abs(last - tr["tp"]) < abs(last - tr["sl"]) else ("وقف مؤمّن" if tr.get("be") else "وقف")
-            event(state, type="close", dir=tr["dir"], strategy=tr["strategy"], price=last, pnl=round(tr.get("upl") or 0, 2), why=f"أُغلقت ({reason}) — النتيجة تقريبية من آخر قراءة", entry=tr["entry"])
-            log(f"الذهب: أُغلقت صفقة {tr['dir']} [{STRAT.get(tr['strategy'])}] ≈ {tr.get('upl') or 0:+.2f}")
+            hit_tp = abs(last - tr["tp"]) < abs(last - tr["sl"])
+            pnl = TP_EUR if hit_tp else -RISK_EUR
+            if tr.get("be"):
+                pnl = 0
+            event(state, type="close", market=tr.get("name"), dir=tr["dir"], strategy=STRAT.get(tr["strategy"]), price=last, pnl=round(pnl, 2),
+                  why="أُغلقت عند الهدف ✅" if hit_tp and not tr.get("be") else ("أُغلقت عند الوقف" if not tr.get("be") else "أُغلقت عند الدخول (مؤمّنة)"))
+            log(f"{tr.get('name')}: أُغلقت صفقة {tr['dir']} ≈ {pnl:+.0f} €")
             del trades[did]
             continue
         pos, mk = p["position"], p["market"]
@@ -345,24 +404,22 @@ def manage(cap, state, positions):
         now_p = float(mk["bid"] if buy else mk["offer"])
         lvl = float(pos["level"])
         tr["last_price"], tr["upl"] = now_p, float(pos.get("upl") or 0)
-        stop = pos.get("stopLevel")
-        dist = abs(lvl - tr["sl"])
-        gain = (now_p - lvl) if buy else (lvl - now_p)
-        if BE_AT_R and not tr.get("be") and stop is not None and dist > 0 and gain >= BE_AT_R * dist:
-            spread = abs(float(mk["offer"]) - float(mk["bid"]))
-            new_stop = round(lvl + spread if buy else lvl - spread, 2)
-            log(f"الذهب: 🔒 نقل الوقف إلى الدخول {new_stop}")
-            if not DRY_RUN:
-                body = {"stopLevel": new_stop}
-                if pos.get("profitLevel") is not None:
-                    body["profitLevel"] = float(pos["profitLevel"])
-                try:
-                    cap.call("PUT", f"/positions/{pos['dealId']}", body)
-                    tr["be"] = True
-                except Exception as e:
-                    log("الذهب: تعذّر التأمين:", e)
-                    continue
-            event(state, type="secure", dir=pos["direction"], strategy=tr["strategy"], price=new_stop, why=f"نقل الوقف لسعر الدخول (ربح {gain:.2f}$ = {BE_AT_R:g}R)")
+        if BE_AT_R and not tr.get("be") and pos.get("stopLevel") is not None:
+            dist = abs(lvl - tr["sl"])
+            gain = (now_p - lvl) if buy else (lvl - now_p)
+            if dist > 0 and gain >= BE_AT_R * dist:
+                spread = abs(float(mk["offer"]) - float(mk["bid"]))
+                new_stop = round(lvl + spread if buy else lvl - spread, 5)
+                if not DRY_RUN:
+                    body = {"stopLevel": new_stop}
+                    if pos.get("profitLevel") is not None:
+                        body["profitLevel"] = float(pos["profitLevel"])
+                    try:
+                        cap.call("PUT", f"/positions/{pos['dealId']}", body)
+                        tr["be"] = True
+                    except Exception as e:
+                        log("تعذّر التأمين:", e); continue
+                event(state, type="secure", market=tr.get("name"), dir=pos["direction"], price=new_stop, why="نقل الوقف لسعر الدخول")
 
 
 def view_open(state, positions, fx):
@@ -374,7 +431,7 @@ def view_open(state, positions, fx):
         if not tr:
             continue
         buy = pos["direction"] == "BUY"
-        out.append({"id": pos["dealId"], "dir": pos["direction"], "size": float(pos["size"]), "entry": float(pos["level"]),
+        out.append({"id": pos["dealId"], "market": tr.get("name"), "dir": pos["direction"], "size": float(pos["size"]), "entry": float(pos["level"]),
                     "price": float(mk["bid"] if buy else mk["offer"]), "stop": float(pos["stopLevel"]) if pos.get("stopLevel") is not None else None,
                     "target": float(pos["profitLevel"]) if pos.get("profitLevel") is not None else None, "pnl": round(float(pos.get("upl") or 0), 2),
                     "strategy": STRAT.get(tr["strategy"], tr["strategy"]), "why": tr.get("why"), "t": tr.get("t"), "be": bool(tr.get("be")),
@@ -382,75 +439,93 @@ def view_open(state, positions, fx):
     return out
 
 
-def blocked_reason(state, s, positions_dir, now, price_atr15):
-    key = f"{s['strategy']}{s['dir']}"
-    last = state.setdefault("cool", {}).get(key)
-    if last and time.time() - last < COOLDOWN_MIN * 60:
-        return f"نفس الاستراتيجية والاتجاه قبل أقل من {COOLDOWN_MIN:g} د"
-    if positions_dir and any(d != s["dir"] for d in positions_dir):
-        return "في صفقات مفتوحة بالاتجاه المعاكس (الحساب بيدمجها)"
-    return None
+def analyze_market(cap, name, ep, now):
+    global EPIC, LEVEL_STEP
+    EPIC, LEVEL_STEP = ep, STEPS.get(name, LEVEL_STEP_DEFAULT)
+    H, M, S = prep(candles(cap, "HOUR", 200)), prep(candles(cap, "MINUTE_15", 200)), prep(candles(cap, "MINUTE_5", 150))
+    ev = evaluate(H, M, S, now)
+    ev.update(name=name, ep=ep, H=H, M=M, S=S, price=S["c"][-1])
+    return ev
 
 
-def cycle(cap, state, now, fx_cache):
+def cycle(cap, state, now, ctx):
+    global EPIC, LEVEL_STEP
     acc = cap.call("GET", "/accounts").get("accounts", [])
     a = next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
     bal = float((a.get("balance") or {}).get("balance") or 0)
     allpos = cap.call("GET", "/positions").get("positions", [])
-    mine = [p for p in allpos if p["market"]["epic"] == EPIC and p["position"]["dealId"] in state.get("trades", {})]
+    trades = state.setdefault("trades", {})
+    mine = [p for p in allpos if p["position"]["dealId"] in trades]
     manage(cap, state, mine)
-    mine = [p for p in mine if p["position"]["dealId"] in state.get("trades", {})]
-    fx = fx_cache.get("v") or eurusd(cap)
-    fx_cache["v"] = fx
-    H, M, S = prep(candles(cap, "HOUR", 200)), prep(candles(cap, "MINUTE_15", 200)), prep(candles(cap, "MINUTE_5", 150))
-    ev = evaluate(H, M, S, now)
-    price = S["c"][-1]
-    dirs = [1 if p["position"]["direction"] == "BUY" else -1 for p in mine]
+    mine = [p for p in mine if p["position"]["dealId"] in trades]
+    fx = ctx.get("fx") or eurusd(cap)
+    ctx["fx"] = fx
+    evs = []
+    for name, ep in ctx["markets"].items():
+        try:
+            evs.append(analyze_market(cap, name, ep, now))
+        except Exception as e:
+            log(f"{name}: تعذّر التحليل:", e)
+    n_open = len(mine)
+    MIN_SCORE_NOW[0] = RELAX_SCORE if n_open < MIN_OPEN else MIN_SCORE
+    cands = []
+    for ev in evs:                                    # إعادة التقييم بالحد الحالي (نخفّفه إذا الصفقات أقل من المطلوب)
+        EPIC, LEVEL_STEP = ev["ep"], STEPS.get(ev["name"], LEVEL_STEP_DEFAULT)
+        ev2 = evaluate(ev["H"], ev["M"], ev["S"], now)
+        ev.update(signals=ev2["signals"], status=ev2["status"])
+        for s in ev["signals"]:
+            cands.append((s["score"], ev, s))
+    cands.sort(key=lambda x: -x[0])
     opened = 0
-    for s in ev["signals"]:
-        if opened >= G_MAX_NEW or (G_MAX_OPEN and len(mine) + opened >= G_MAX_OPEN):
+    seen = state.setdefault("seen", {})
+    cool = state.setdefault("cool", {})
+    for score, ev, s in cands:
+        if opened >= G_MAX_NEW or (G_MAX_OPEN and n_open + opened >= G_MAX_OPEN):
             break
+        name, ep = ev["name"], ev["ep"]
+
+        def block(why):
+            for st in ev["status"]:
+                if st["id"] == s["strategy"]:
+                    st["state"] = "blocked"; st["text"] += " — " + why
         if not ev["sess"]["ok"]:
-            for st in ev["status"]:
-                if st["id"] == s["strategy"]:
-                    st["state"] = "blocked"
-                    st["text"] += " — ممنوع الآن: " + ("وقت أخبار " + ev["sess"]["blackout"] + " غرينتش" if ev["sess"]["blackout"] else ev["sess"]["quality"])
+            block("ممنوع الآن: " + ("وقت أخبار " + ev["sess"]["blackout"] if ev["sess"]["blackout"] else ev["sess"]["quality"])); continue
+        key = f"{ep}:{s['strategy']}{s['dir']}"
+        stamp = (ev["S"] if s["strategy"] in ("trend", "pullback") else ev["M"])["cs"][-1]["t"].isoformat()
+        if seen.get(key) == stamp:
             continue
-        ck = state.setdefault("seen", {})
-        ckey = f"{s['strategy']}{s['dir']}"
-        stamp = (M if s["strategy"] in ("bounce", "retest", "asia") else S)["cs"][-1]["t"].isoformat()
-        if ck.get(ckey) == stamp:
-            continue                                   # نفس الشمعة سبق تقييمها
-        why_not = blocked_reason(state, s, dirs + [s["dir"]] * 0 if not dirs else dirs, now, M["a"][-1])
-        if not why_not and any(abs(price - float(p["position"]["level"])) < 0.5 * (M["a"][-1] or 1) and (1 if p["position"]["direction"] == "BUY" else -1) == s["dir"] for p in mine):
-            why_not = "في صفقة بنفس الاتجاه قريبة من هذا السعر"
-        if why_not:
-            for st in ev["status"]:
-                if st["id"] == s["strategy"]:
-                    st["state"] = "blocked"; st["text"] += " — " + why_not
-            continue
+        if time.time() - cool.get(key, 0) < COOLDOWN_MIN * 60:
+            block(f"نفس الإشارة قبل أقل من {COOLDOWN_MIN:g} د"); continue
+        same = [p for p in mine if p["market"]["epic"] == ep]
+        if any((1 if p["position"]["direction"] == "BUY" else -1) != s["dir"] for p in same):
+            block("في صفقة معاكسة مفتوحة على نفس السوق"); continue
+        atr = ev["M"]["a"][-1] or 1
+        if any(abs(ev["price"] - float(p["position"]["level"])) < 0.4 * atr for p in same):
+            block("في صفقة قريبة من هذا السعر"); continue
+        EPIC, LEVEL_STEP = ep, STEPS.get(name, LEVEL_STEP_DEFAULT)
         res = open_trade(cap, state, s, now, fx)
-        ck[ckey] = stamp
+        seen[key] = stamp
         if res:
             opened += 1
-            state["cool"][ckey] = time.time()
-            dirs.append(s["dir"])
-            state.setdefault("trades", {})[res["id"]] = {"strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
-                                                         "sl": res["stop"], "tp": res["target"], "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
-            event(state, type="open", dir="BUY" if s["dir"] > 0 else "SELL", strategy=STRAT[s["strategy"]], price=res["price"], size=res["size"],
-                  value_eur=round(res["value"]), stop=res["stop"], target=res["target"], risk=round(res["risk"], 2), score=s["score"], pattern=s["pattern"],
-                  why=s["why"], h1=ev["h1"], m15=ev["m15"])
-    state["analysis"] = {"price": round(price, 2), "h1": ev["h1"], "m15": ev["m15"], "sess": ev["sess"], "status": ev["status"],
-                         "tf": [tf_view(H, "الساعة"), tf_view(M, "15 دقيقة"), tf_view(S, "5 دقائق")],
-                         "levels": {"near": nearest_level(price), "step": LEVEL_STEP}}
-    publish(cap, state, bal, mine, fx, now)
+            cool[key] = time.time()
+            trades[res["id"]] = {"name": NAMES.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
+                                 "sl": res["stop"], "tp": res["target"], "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
+            mine.append({"position": {"dealId": res["id"], "direction": "BUY" if s["dir"] > 0 else "SELL", "level": res["price"], "size": res["size"],
+                                      "stopLevel": res["stop"], "profitLevel": res["target"], "upl": 0},
+                         "market": {"epic": ep, "bid": res["price"], "offer": res["price"]}})
+            event(state, type="open", market=NAMES.get(name, name), dir="BUY" if s["dir"] > 0 else "SELL", strategy=STRAT[s["strategy"]], price=res["price"], size=res["size"],
+                  value_eur=round(res["value"]), stop=res["stop"], target=res["target"], risk=RISK_EUR, score=s["score"], pattern=s["pattern"], why=s["why"])
+    state["analysis"] = [{"name": NAMES.get(ev["name"], ev["name"]), "epic": ev["ep"], "price": round(ev["price"], 4), "h1": ev["h1"], "m15": ev["m15"],
+                          "sess": ev["sess"], "status": ev["status"], "tf": [tf_view(ev["H"], "الساعة"), tf_view(ev["M"], "15 دقيقة"), tf_view(ev["S"], "5 دقائق")]} for ev in evs]
+    publish(cap, state, bal, mine, fx, now, n_open + opened)
 
 
-def publish(cap, state, bal, mine, fx, now):
+def publish(cap, state, bal, mine, fx, now, n_open):
     hist = []
     try:
         rows = bot.history_rows(cap, state)
-        hist = [r for r in rows if "gold" in str(r.get("name") or "").lower() or "xau" in str(r.get("name") or "").lower()][:40]
+        keys = ("gold", "xau", "oil", "crude", "silver", "xag", "dollar", "dxy", "eur/usd", "eurusd")
+        hist = [r for r in rows if any(k in str(r.get("name") or "").lower() for k in keys)][:40]
     except Exception as e:
         log("⚠️ سجل المعاملات:", e)
     today = now.strftime("%Y-%m-%d")
@@ -459,8 +534,9 @@ def publish(cap, state, bal, mine, fx, now):
     data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "demo", "balance": round(bal, 2),
             "day_pnl": round(realized + sum(o["pnl"] for o in open_v), 2), "open": open_v, "history": hist,
             "analysis": state.get("analysis"), "events": state.get("events", [])[::-1][:80], "log": list(bot.LOG_BUF)[-50:],
-            "settings": {"trade_eur": TRADE_EUR, "max_open": G_MAX_OPEN, "rr": RR, "min_score": MIN_SCORE, "session": f"{SESSION_FROM}-{SESSION_TO} GMT",
-                         "best": f"{BEST_FROM}-{BEST_TO} GMT", "news_blackout": NEWS_BLACKOUT, "be_at_r": BE_AT_R}}
+            "settings": {"min_trade_eur": MIN_TRADE_EUR, "risk_eur": RISK_EUR, "tp_eur": TP_EUR, "min_open": MIN_OPEN, "max_open": G_MAX_OPEN,
+                         "min_score": MIN_SCORE, "relax_score": RELAX_SCORE, "markets": [NAMES.get(m, m) for m in MARKETS],
+                         "news_blackout": NEWS_BLACKOUT, "open_now": n_open}}
     if bot.PUBLISH_ON:
         bot.push_file("gold.json", data, GOLD_BRANCH)
 
@@ -474,12 +550,15 @@ def main():
     state = bot.load_state()
     cap = bot.Capital()
     cap.login()
-    log(f"🥇 روبوت الذهب (تجريبي) | قيمة الصفقة {TRADE_EUR:.0f} € | أقصى صفقات {G_MAX_OPEN or '∞'} | RR {RR:g} | حد القوة {MIN_SCORE}")
-    end, fx_cache = time.time() + LOOP_MINUTES * 60, {}
+    ctx = {"markets": resolve_markets(cap)}
+    if not ctx["markets"]:
+        raise SystemExit("ما لقيت أي سوق")
+    log(f"🥇 روبوت الأسواق (تجريبي) | {', '.join(NAMES.get(m, m) for m in ctx['markets'])} | صفقة ≥{MIN_TRADE_EUR:.0f}€ | وقف -{RISK_EUR:.0f}€ هدف +{TP_EUR:.0f}€ | هدف: {MIN_OPEN}+ صفقات معاً")
+    end = time.time() + LOOP_MINUTES * 60
     while True:
         now = datetime.now(timezone.utc)
         try:
-            cycle(cap, state, now, fx_cache)
+            cycle(cap, state, now, ctx)
             bot.save_state(state)
         except Exception as e:
             log("خطأ عام:", e)
