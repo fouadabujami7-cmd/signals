@@ -67,5 +67,3 @@ jobs:
           ALLOW_WEEKEND: "1"           # السبت والأحد للأسواق المفتوحة (كريبتو)
           NEWS_BLACKOUT: "13:28-13:38,14:58-15:08"   # دقائق صدور الأرقام الكبرى فقط
           STOP_FILE: "STOP.txt"
-          REC_NODE_CALLS: "60"
-          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
