@@ -30,10 +30,15 @@ RELAX_SCORE = int(E("G_RELAX_SCORE", "20"))           # إذا الصفقات أ
 RR = TP_EUR / RISK_EUR
 LEVEL_STEP_DEFAULT = 50.0
 MARGIN_EUR = float(E("MARGIN_EUR", "0"))               # هامش كل صفقة (0 = معطّل): قيمة الصفقة = الهامش × الرافعة المتاحة للسوق
+MARGIN_MIN = float(E("MARGIN_MIN", "0"))                # أقل هامش مقبول للصفقة (0 = بلا حد أدنى)
+MARGIN_MAX = float(E("MARGIN_MAX", "0"))                # أعلى هامش مقبول (0 = MARGIN_EUR × 1.3)
 REACH_ATR = float(E("REACH_ATR", "0"))                 # يتجاهل الصفقة إذا الهدف أبعد من هذا العدد من ATR 15 دقيقة (0 = معطّل)
 NEWS_MODE = E("NEWS_MODE", "off")                      # off | boost (يرفع/يخفض القوة) | require (لا يدخل ضد الأخبار)
 NEWS_MIN = float(E("NEWS_MIN", "0.15"))                # أقل قوة خبر تعتبر اتجاهاً
 ALLOW_WEEKEND = E("ALLOW_WEEKEND", "0") == "1"           # السماح بالدخول السبت والأحد (الأسواق المفتوحة فقط، مثل الكريبتو)
+MAX_PER_TYPE = int(E("MAX_PER_TYPE", "0"))             # أقصى صفقات من نفس النوع (أسهم/سلع/عملات/مؤشرات/كريبتو) لتنويع الصفقات (0 = معطّل)
+PRIORITY = [x.strip() for x in E("PRIORITY", "").split(",") if x.strip()]   # أسواق تُحلَّل كل دورة وتأخذ أفضلية (مثل GOLD,OIL_CRUDE)
+SPEED_BONUS = float(E("SPEED_BONUS", "0"))             # مكافأة للأسواق الأسرع حركة: قوة += min(15, ATR5% × هذا الرقم)
 MAX_PER_EPIC = int(E("MAX_PER_EPIC", "0"))             # أقصى صفقات مفتوحة على نفس السوق (1 = صفقة واحدة لكل سهم/سوق)
 MAX_HOLD_MIN = float(E("MAX_HOLD_MIN", "0"))           # أغلق الصفقة إذا مرّ هذا الوقت (0 = بلا إغلاق بالوقت)
 DAILY_LOSS_EUR = float(E("DAILY_LOSS_EUR", "0"))       # بعد هذه الخسارة اليومية يتوقف عن فتح صفقات جديدة (0 = معطّل)
@@ -396,8 +401,10 @@ def open_trade(cap, state, s, now, avail=None):
     size = max(size, min_size)
     size = min(size, float((rules.get("maxDealSize") or {}).get("value") or 1e12))
     value = size * price * lot / fx
-    if MARGIN_EUR and mf > 0 and value * mf / 100 > MARGIN_EUR * 1.3:
-        log(f"{EPIC}: أصغر حجم ({min_size}) يحتاج هامش {value * mf / 100:.0f} € أكبر من {MARGIN_EUR:.0f} — تخطي"); return None
+    if MARGIN_EUR and mf > 0:
+        margin = value * mf / 100
+        if margin > (MARGIN_MAX or MARGIN_EUR * 1.3) or margin < MARGIN_MIN:
+            log(f"{EPIC}: هامش الصفقة {margin:.0f} € خارج المجال المطلوب ({MARGIN_MIN:.0f}–{MARGIN_MAX or MARGIN_EUR * 1.3:.0f}) — تخطي"); return None
     if value < MIN_TRADE_EUR * 0.9 or value > MAX_TRADE_EUR * 1.5:
         log(f"{EPIC}: قيمة الصفقة {value:.0f} € خارج الحدود (أصغر حجم {min_size}) — تخطي"); return None
     if avail is not None and avail < value * 0.25:
@@ -431,7 +438,7 @@ def open_trade(cap, state, s, now, avail=None):
         return None
     ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
     ids = [i for i in dict.fromkeys(ids) if i]
-    return {"id": ids[0] if ids else ref, "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR, "fx": fx}
+    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": target, "value": value, "risk": RISK_EUR, "fx": fx}
 
 
 def event(state, **kw):
@@ -474,6 +481,31 @@ def gate(cap, state):
     return None
 
 
+def reconcile(state, allpos):
+    """يربط صفقات البوت بصفقات الحساب الحقيقية حتى لو اختلف رقم الصفقة (dealId) بين الطلب والقائمة"""
+    trades = state.setdefault("trades", {})
+    live = {p["position"]["dealId"]: p for p in allpos}
+    taken = set(live) & set(trades)
+    for did, tr in list(trades.items()):
+        if did in live:
+            continue
+        match = next((i for i in (tr.get("ids") or []) if i in live and i not in taken), None)
+        if not match:                                     # احتياطي: نفس السوق والاتجاه والحجم وسعر الدخول القريب
+            for i, p in live.items():
+                pos = p["position"]
+                if i in taken or p["market"]["epic"] != tr.get("epic") or pos.get("direction") != tr["dir"]:
+                    continue
+                try:
+                    if abs(float(pos["size"]) - float(tr.get("size0") or tr.get("size") or 0)) < 1e-9 and abs(float(pos["level"]) - tr["entry"]) <= 0.003 * tr["entry"]:
+                        match = i; break
+                except Exception:
+                    continue
+        if match:
+            log(f"🔗 ربطت صفقة {tr.get('name')} برقم الحساب {match} (كان {did})")
+            trades[match] = trades.pop(did)
+            taken.add(match)
+
+
 def manage(cap, state, positions):
     """يتتبّع صفقاتنا ويسجّل الإغلاقات؛ التأمين اختياري (BE_AT_R>0)"""
     trades = state.setdefault("trades", {})
@@ -482,15 +514,16 @@ def manage(cap, state, positions):
         p = live.get(did)
         if not p:
             last = tr.get("last_price") or tr["entry"]
-            hit_tp = abs(last - tr["tp"]) < abs(last - tr["sl"])
-            pnl = TP_EUR if hit_tp else -RISK_EUR
-            if tr.get("be"):
-                pnl = 0
+            known = tr.get("upl") is not None
+            pnl = round((tr.get("upl") or 0) / (tr.get("fx") or 1.08), 2)       # آخر ربح/خسارة مسجّلة (تقريبية) — وليس رقماً مفترضاً
+            hit_tp = pnl >= TP_EUR * 0.5
             if tr.get("forced") is not None:
                 pnl = tr["forced"]; hit_tp = pnl > 0
+            if not known:
+                log(f"⚠️ {tr.get('name')}: اختفت الصفقة قبل أول قراءة. المعرّفات المتتبَّعة {tr.get('ids')} — راجع سجل كابيتال للنتيجة الفعلية")
             account(state, pnl)
             event(state, type="close", market=tr.get("name"), dir=tr["dir"], strategy=STRAT.get(tr["strategy"]), price=last, pnl=round(pnl, 2),
-                  why="⏱ أُغلقت بالوقت" if tr.get("forced") is not None else "أُغلقت عند الهدف ✅" if hit_tp and not tr.get("be") else ("أُغلقت عند الوقف" if not tr.get("be") else "أُغلقت عند الدخول (مؤمّنة)"))
+                  why="⏱ أُغلقت بالوقت" if tr.get("forced") is not None else ("أُغلقت — النتيجة غير معروفة بدقة، راجع كابيتال" if not known else ("أُغلقت بربح (≈ آخر قراءة) ✅" if hit_tp else "أُغلقت بخسارة (≈ آخر قراءة)")))
             log(f"{tr.get('name')}: أُغلقت صفقة {tr['dir']} ≈ {pnl:+.0f} €")
             del trades[did]
             continue
@@ -565,6 +598,7 @@ def pick_markets(cap, state, ctx):
     ptr = state.get("ptr", 0) % max(len(order), 1)
     chunk = [order[(ptr + i) % len(order)] for i in range(min(SCAN_PER_CYCLE, len(order)))]
     state["ptr"] = (ptr + len(chunk)) % max(len(order), 1)
+    chunk = [e for e in PRIORITY if e in uni] + [e for e in chunk if e not in PRIORITY]
     state["scan_total"] = len(order)
     out = []
     for i in range(0, len(chunk), 50):
@@ -595,6 +629,7 @@ def cycle(cap, state, now, ctx):
     bal = float((a.get("balance") or {}).get("balance") or 0)
     allpos = cap.call("GET", "/positions").get("positions", [])
     trades = state.setdefault("trades", {})
+    reconcile(state, allpos)
     mine = [p for p in allpos if p["position"]["dealId"] in trades]
     manage(cap, state, mine)
     mine = [p for p in mine if p["position"]["dealId"] in trades]
@@ -606,7 +641,10 @@ def cycle(cap, state, now, ctx):
             evs.append(analyze_market(cap, name, ep, now, p0))
         except Exception as e:
             log(f"{name}: تعذّر التحليل:", str(e)[:120])
-    n_open = len(mine)
+    book = list(allpos)                                # كل صفقات الحساب (حتى لو ضاعت ذاكرة البوت): الحدود تُحسب عليها
+    n_open = len(book)
+    if n_open > len(mine):
+        log(f"ℹ️ في {n_open - len(mine)} صفقة بالحساب خارج تتبّع هذا البوت (يدوية أو من بوت آخر) — محسوبة ضمن حد {G_MAX_OPEN} صفقات")
     halt = gate(cap, state)
     if halt:
         log("⛔ " + halt)
@@ -617,7 +655,12 @@ def cycle(cap, state, now, ctx):
         EPIC, LEVEL_STEP = ev["ep"], ev["step"]
         ev2 = evaluate(ev["H"], ev["M"], ev["S"], now)
         ev.update(signals=ev2["signals"], status=ev2["status"])
+        pct5 = (ev["S"]["a"][-1] or 0) / ev["price"] * 100
         for s in ev["signals"]:
+            if SPEED_BONUS:
+                s["score"] += min(15, pct5 * SPEED_BONUS)
+            if ev["ep"] in PRIORITY:
+                s["score"] += 5
             cands.append((s["score"], ev, s))
     cands.sort(key=lambda x: -x[0])
     opened = 0
@@ -642,7 +685,10 @@ def cycle(cap, state, now, ctx):
             continue
         if time.time() - cool.get(key, 0) < COOLDOWN_MIN * 60:
             block(f"نفس الإشارة قبل أقل من {COOLDOWN_MIN:g} د"); continue
-        same = [p for p in mine if p["market"]["epic"] == ep]
+        same = [p for p in book if p["market"]["epic"] == ep]
+        ty = ctx["uni"].get(ep, {}).get("t")
+        if MAX_PER_TYPE and ty and sum(1 for p in book if ctx["uni"].get(p["market"]["epic"], {}).get("t") == ty) >= MAX_PER_TYPE:
+            block(f"وصلت الحد من هذا النوع ({ty}) — تنويع"); continue
         if MAX_PER_EPIC and len(same) >= MAX_PER_EPIC:
             block(f"في صفقة مفتوحة على هذا السوق (الحد {MAX_PER_EPIC})"); continue
         if any((1 if p["position"]["direction"] == "BUY" else -1) != s["dir"] for p in same):
@@ -675,8 +721,9 @@ def cycle(cap, state, now, ctx):
             opened += 1
             avail -= res["value"] * 0.25
             cool[key] = time.time()
-            trades[res["id"]] = {"fx": res.get("fx"), "name": DISP.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
+            trades[res["id"]] = {"ids": res.get("ids") or [res["id"]], "size0": res["size"], "fx": res.get("fx"), "name": DISP.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
                                  "sl": res["stop"], "tp": res["target"], "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
+            book.append({"position": {"direction": "BUY" if s["dir"] > 0 else "SELL", "level": res["price"]}, "market": {"epic": ep}})
             mine.append({"position": {"dealId": res["id"], "direction": "BUY" if s["dir"] > 0 else "SELL", "level": res["price"], "size": res["size"],
                                       "stopLevel": res["stop"], "profitLevel": res["target"], "upl": 0},
                          "market": {"epic": ep, "bid": res["price"], "offer": res["price"]}})
