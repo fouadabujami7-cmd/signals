@@ -514,12 +514,16 @@ def reconcile(state, allpos):
 def ladder(cap, state, tr, pos, mk, buy, now_p, lvl):
     """سلّم الوقف: ربح n×STEP → الوقف يُقفل عند n×STEP×LOCK (5→3، 10→6، 15→9 ...) ولا يتراجع أبداً"""
     fx = tr.get("fx") or 1.08
-    pnl = float(pos.get("upl") or 0) / fx
+    size = float(pos["size"])
+    lot = tr.get("lot")
+    if lot:   # الربح من حركة السعر نفسها (لا يعتمد على عملة/وحدة حقل upl)
+        pnl = ((now_p - lvl) if buy else (lvl - now_p)) * size * lot / fx
+    else:
+        pnl = float(pos.get("upl") or 0) / fx
+    tr["pnl_eur"] = round(pnl, 2)
     n = int(pnl // LADDER_STEP)
     if n < 1 or n <= tr.get("lad", 0):
         return
-    size = float(pos["size"])
-    lot = tr.get("lot")
     if not lot:
         gain = (now_p - lvl) if buy else (lvl - now_p)
         if gain <= 0 or not float(pos.get("upl") or 0): return
@@ -607,7 +611,8 @@ def manage(cap, state, positions):
             try:
                 ladder(cap, state, tr, pos, mk, buy, now_p, lvl)
             except Exception as e:
-                log("تعذّر تحريك الوقف:", str(e)[:120])
+                log("تعذّر تحريك الوقف:", str(e)[:200])
+                event(state, type="warn", market=tr.get("name"), dir=pos["direction"], price=now_p, why="تعذّر رفع الوقف: " + str(e)[:160])
 
 
 def view_open(state, positions, fx):

@@ -1,0 +1,76 @@
+name: scalp
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: scalp
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    permissions:
+      contents: write        # لنشر gold.json على فرع gold-data فقط
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: scalp_state.json
+          key: scalp-state-${{ github.run_id }}
+          restore-keys: scalp-state-
+      - run: python gold.py
+        env:
+          # مفاتيح الحساب التجريبي (إن لم تضفها يستخدم المفاتيح العادية)
+          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY || secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER || secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD || secrets.CAP_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOLD_BRANCH: "scalp-data"
+          CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
+          STATE_FILE: "scalp_state.json"
+          LOOP_MINUTES: "14"
+          CYCLE_SECONDS: "20"
+          SCAN_PER_CYCLE: "24"         # كم سوق يحلل كل دورة (يدور على كل أسواق كابيتال)
+          REC_NODE_CALLS: "60"         # عدد طلبات قراءة قائمة الأسواق (مرة كل 24 ساعة)
+          SPREAD_MAX_PCT: "0.4"        # يتجاهل الأسواق ذات السبريد الكبير
+          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
+          # ===== الخاطف: حتى 20 صفقة متنوعة، هامش ≈300€ لكل صفقة، وقف 10€ وسلّم وقف بلا هدف، وكل ما تغلق وحدة تُفتح بدلها =====
+          MARGIN_EUR: "300"            # هامش كل صفقة ≈300 يورو بأكبر رافعة يسمح بها السوق
+          MARGIN_MIN: "250"            # لا أقل من 250 يورو
+          MARGIN_MAX: "350"            # ولا أكثر من 350 يورو
+          TRADE_EUR: "0"
+          MAX_TRADE_EUR: "30000"
+          TP_EUR: "5"                  # أول درجة (تُستعمل لفحص الجدوى فقط)
+          NO_TP: "1"                   # بلا هدف ربح ثابت
+          LADDER_STEP: "5"             # كل +5 يورو ربح يرتفع الوقف درجة
+          LADDER_LOCK: "0.6"           # ويقفل 60% من الربح: +5 ← +3، +10 ← +6، +15 ← +9، +20 ← +12 ...
+          RISK_EUR: "10"               # الوقف: خسارة 10 يورو
+          REACH_ATR: "6"
+          SPREAD_STOP_FRAC: "0.3"
+          MIN_ATR_PCT: "0.05"          # فلتر السرعة: أسواق سريعة الحركة فقط
+          SPEED_BONUS: "50"            # الأسرع حركة أولوية
+          PRIORITY: "GOLD,OIL_CRUDE"   # الذهب والنفط يُفحصان كل دورة وبأفضلية
+          MAX_HOLD_MIN: "0"
+          NEWS_MODE: "require"
+          NEWS_MIN: "0.15"
+          NEWS_HOURS: "12"
+          NEWS_TTL_MIN: "20"
+          MIN_OPEN: "20"               # يبقي 20 صفقة: كل ما تنسكر وحدة يفتح بدلها
+          G_MAX_OPEN: "20"             # أقصى 20 صفقة معاً
+          G_MAX_NEW: "8"
+          MAX_PER_EPIC: "1"            # صفقة واحدة لكل سوق
+          MAX_PER_TYPE: "8"            # حتى 8 صفقات من نفس النوع (تنويع: أسهم/سلع/مؤشرات/عملات/كريبتو)
+          G_MIN_SCORE: "40"
+          G_RELAX_SCORE: "25"
+          G_COOLDOWN_MIN: "3"
+          DAILY_LOSS_EUR: "200"        # حد الخسارة اليومية
+          STREAK_N: "0"                # بلا استراحة بعد خسائر متتالية (حتى يعوّض فوراً)
+          BE_AT_R: "0"
+          SESSION_GMT: "0-24"
+          ALLOW_WEEKEND: "1"
+          NEWS_BLACKOUT: "13:28-13:38,14:58-15:08"
+          STOP_FILE: "STOP.txt"
