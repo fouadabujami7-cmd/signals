@@ -1,0 +1,22 @@
+name: ko-check
+on:
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python ko_probe.py
+        env:
+          CAP_API_KEY: ${{ secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.CAP_PASSWORD }}
+          CAP_ENV: "live"              # حسابك الحقيقي (قراءة فقط: لا يفتح ولا يعدّل صفقات)
+          LIVE_CONFIRM: "I_UNDERSTAND"
+          PUBLISH: "0"
