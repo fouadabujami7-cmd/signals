@@ -33,15 +33,17 @@ jobs:
           STATE_FILE: "gold_state.json"
           LOOP_MINUTES: "14"
           CYCLE_SECONDS: "45"
-          GOLD_EPIC: "GOLD"
-          TRADE_EUR: "500"             # قيمة كل صفقة
-          G_MAX_OPEN: "5"              # أقصى صفقات معاً (0 = بلا حد)
-          G_MAX_NEW: "2"               # أقصى صفقات جديدة بالدورة
-          G_RR: "2"                    # الهدف = ضعف الوقف
-          G_MIN_SCORE: "60"            # أقل قوة للدخول (قلّلها لصفقات أكثر)
-          G_COOLDOWN_MIN: "20"
-          G_MAX_RISK_EUR: "100"        # سقف خسارة الصفقة الواحدة
-          BE_AT_R: "1"                 # تأمين الصفقة عند ربح = مسافة الوقف
-          SESSION_GMT: "7-20"
-          BEST_GMT: "13-17"
-          NEWS_BLACKOUT: "13:15-13:45,15:00-15:15"
+          MARKETS: "GOLD,OIL_CRUDE,SILVER,DOLLAR"   # الذهب والنفط والفضة والدولار
+          TRADE_EUR: "500"             # أقل قيمة للصفقة
+          MAX_TRADE_EUR: "8000"        # أعلى قيمة (لازم تكبر الصفقة ليكون وقف 50€ منطقي)
+          RISK_EUR: "50"               # وقف الخسارة = 50 يورو
+          TP_EUR: "50"                 # الهدف = 50 يورو
+          MIN_OPEN: "5"                # يحاول إبقاء 5 صفقات أو أكثر معاً
+          G_MAX_OPEN: "12"
+          G_MAX_NEW: "4"
+          G_MIN_SCORE: "35"
+          G_RELAX_SCORE: "20"          # إذا الصفقات أقل من 5 يدخل مع الاتجاه مباشرة
+          G_COOLDOWN_MIN: "5"
+          BE_AT_R: "0"                 # بدون تأمين: وقف وهدف ثابتان
+          SESSION_GMT: "0-24"          # طول الوقت (ما عدا عطلة السوق ووقت الأخبار)
+          NEWS_BLACKOUT: "13:25-13:40,14:55-15:10"
