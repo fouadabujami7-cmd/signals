@@ -76,8 +76,6 @@ CYCLE_SECONDS = float(E("CYCLE_SECONDS", "20"))
 GOLD_BRANCH = E("GOLD_BRANCH", "gold-data")
 STATE_FILE = E("STATE_FILE", "gold_state.json")
 DRY_RUN = E("DRY_RUN", "0") == "1"
-ACCOUNT_NAME = E("ACCOUNT_NAME", "").strip()            # اسم الحساب داخل كابيتال (مثل "Account 2") — فارغ = الحساب المختار حالياً
-ACC_ID = [None]
 def _sb(x):
     out = {}
     for part in x.split(","):
@@ -431,9 +429,8 @@ def open_trade(cap, state, s, now, avail=None):
             log(f"{EPIC}: هامش الصفقة {margin:.0f} € خارج المجال المطلوب ({MARGIN_MIN:.0f}–{MARGIN_MAX or MARGIN_EUR * 1.3:.0f}) — تخطي"); return None
     if value < MIN_TRADE_EUR * 0.9 or value > MAX_TRADE_EUR * 1.5:
         log(f"{EPIC}: قيمة الصفقة {value:.0f} € خارج الحدود (أصغر حجم {min_size}) — تخطي"); return None
-    need = value * mf / 100 if (MARGIN_EUR and mf > 0) else value * 0.25     # الهامش المطلوب فعلياً
-    if avail is not None and avail < need:
-        log(f"{EPIC}: الرصيد المتاح {avail:.0f} قليل لصفقة {value:.0f} € (هامش {need:.0f} €) — تخطي"); return None
+    if avail is not None and avail < value * 0.25:
+        log(f"{EPIC}: الرصيد المتاح {avail:.0f} قليل لصفقة {value:.0f} € — تخطي"); return None
     dist = RISK_EUR * fx / (size * lot)                          # مسافة تعطي خسارة = RISK_EUR بالضبط
     tdist = TP_EUR * fx / (size * lot)
     mind = bot.min_dist(rules, "minStopOrProfitDistance", price) * 1.1
@@ -450,12 +447,10 @@ def open_trade(cap, state, s, now, avail=None):
     target = round(price + tdist if buy else price - tdist, dec)
     log(f"{EPIC}: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} (-{RISK_EUR:.0f}€) | {('هدف ' + str(target) + ' (+' + format(TP_EUR, '.0f') + '€)') if not NO_TP else 'بلا هدف: وقف متحرّك'} | {s['why']}")
     if DRY_RUN:
-        return {"id": "dry", "need": need, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
+        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
     order = {"epic": EPIC, "direction": "BUY" if buy else "SELL", "size": size, "stopLevel": stop, "guaranteedStop": False}
     if not NO_TP:
         order["profitLevel"] = target
-    if not on_my_account(cap):
-        log(f"{EPIC}: ⛔ الجلسة مش على حساب {ACCOUNT_NAME} — ما فتحت الصفقة"); return None
     try:
         ref = cap.call("POST", "/positions", order).get("dealReference")
         time.sleep(1)
@@ -467,7 +462,7 @@ def open_trade(cap, state, s, now, avail=None):
         return None
     ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
     ids = [i for i in dict.fromkeys(ids) if i]
-    return {"id": ids[0] if ids else ref, "ids": ids, "need": need, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
+    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
 
 
 def event(state, **kw):
@@ -717,44 +712,10 @@ def pick_markets(cap, state, ctx):
     return out
 
 
-def use_account(cap):
-    """يثبّت البوت على الحساب المحدد بالاسم (ACCOUNT_NAME) حتى لا يتداول على حساب آخر بالغلط."""
-    if not ACCOUNT_NAME:
-        return
-    accs = cap.call("GET", "/accounts").get("accounts", [])
-    a = next((x for x in accs if str(x.get("accountName", "")).strip().lower() == ACCOUNT_NAME.lower()), None)
-    if not a:
-        names = ", ".join(str(x.get("accountName")) for x in accs)
-        log(f"⛔ ما لقيت حساب باسم '{ACCOUNT_NAME}'. الحسابات الموجودة: {names}")
-        raise SystemExit(1)
-    ACC_ID[0] = a.get("accountId")
-    if not a.get("preferred"):
-        try:
-            cap.call("PUT", "/session", {"accountId": ACC_ID[0]})
-        except RuntimeError as e:
-            if "not-different" not in str(e).lower():
-                raise
-        log(f"🔀 تم التحويل إلى الحساب: {ACCOUNT_NAME}")
-
-
-def on_my_account(cap):
-    """تأكد قبل كل صفقة أن الجلسة على حساب البوت."""
-    if not ACC_ID[0]:
-        return True
-    for _ in range(2):
-        cur = cap.call("GET", "/session").get("accountId")
-        if cur == ACC_ID[0]:
-            return True
-        use_account(cap)
-    return False
-
-
 def cycle(cap, state, now, ctx):
     global EPIC, LEVEL_STEP
-    use_account(cap)
     acc = cap.call("GET", "/accounts").get("accounts", [])
-    a = next((x for x in acc if ACC_ID[0] and x.get("accountId") == ACC_ID[0]), None) \
-        or next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
+    a = next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
     bal = float((a.get("balance") or {}).get("balance") or 0)
     allpos = cap.call("GET", "/positions").get("positions", [])
     trades = state.setdefault("trades", {})
@@ -848,7 +809,7 @@ def cycle(cap, state, now, ctx):
         seen[key] = stamp
         if res:
             opened += 1
-            avail -= res.get("need", res["value"] * 0.25)
+            avail -= res["value"] * 0.25
             cool[key] = time.time()
             trades[res["id"]] = {"ids": res.get("ids") or [res["id"]], "size0": res["size"], "fx": res.get("fx"), "name": DISP.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
                                  "sl": res["stop"], "tp": res["target"], "lot": res.get("lot"), "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
@@ -877,7 +838,7 @@ def publish(cap, state, bal, mine, fx, now, n_open):
     today = now.strftime("%Y-%m-%d")
     realized = sum(r["pnl"] for r in hist if str(r.get("t") or "").startswith(today))
     open_v = view_open(state, mine, fx)
-    data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "demo", "account": ACCOUNT_NAME, "balance": round(bal, 2),
+    data = {"updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "demo", "balance": round(bal, 2),
             "day_pnl": round(realized + sum(o["pnl"] for o in open_v), 2), "open": open_v, "history": hist,
             "analysis": state.get("analysis"), "events": state.get("events", [])[::-1][:80], "log": list(bot.LOG_BUF)[-50:],
             "halt": state.get("halt"), "day": state.get("day"), "settings": {"hold_min": MAX_HOLD_MIN, "daily_loss": DAILY_LOSS_EUR, "min_trade_eur": MIN_TRADE_EUR, "risk_eur": RISK_EUR, "tp_eur": TP_EUR, "min_open": MIN_OPEN, "max_open": G_MAX_OPEN,
@@ -895,11 +856,6 @@ def main():
     bot.STATE_FILE = STATE_FILE
     state = bot.load_state()
     cap = bot.Capital()
-    _login = cap.login
-    def login_and_pin():                               # بعد كل تسجيل دخول (حتى إعادة الدخول) يرجع لنفس الحساب
-        _login()
-        use_account(cap)
-    cap.login = login_and_pin
     cap.login()
     uni = bot.build_rec_universe(cap, state)
     bot.save_state(state)
@@ -914,6 +870,7 @@ def main():
         raise SystemExit("ما لقيت أي سوق")
     for ep, v in uni.items():
         DISP.setdefault(ep, v["n"])
+    log(f"🔒 سلّم الوقف: {'جدول ' + str(LADDER_TABLE) + ' ثم كل +' + format(LADDER_EXTRA_STEP, 'g') + '€ ← +' + format(LADDER_EXTRA_LOCK, 'g') + '€' if LADDER_TABLE else ('كل ' + format(LADDER_STEP, 'g') + '€ يقفل ' + format(LADDER_LOCK * 100, '.0f') + '%' if LADDER_STEP else 'معطّل')} | بلا هدف ثابت: {NO_TP} | مرتدات: {STRAT_BONUS or 'لا'}")
     log(f"🌍 يراقب {len(uni)} سوقاً (كل شي قابل للتداول) | صفقة ≥{MIN_TRADE_EUR:.0f}€ | وقف -{RISK_EUR:.0f}€ هدف +{TP_EUR:.0f}€ | هدف: {MIN_OPEN}+ صفقات معاً")
     end = time.time() + LOOP_MINUTES * 60
     while True:
