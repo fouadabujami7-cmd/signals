@@ -1,0 +1,83 @@
+name: claude
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: claude
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    permissions:
+      contents: write        # لنشر gold.json على فرع gold-data فقط
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: claude_state.json
+          key: claude-state-${{ github.run_id }}
+          restore-keys: claude-state-
+      - run: python gold.py
+        env:
+          # مفاتيح الحساب التجريبي (إن لم تضفها يستخدم المفاتيح العادية؛ البوت يعمل على Demo فقط)
+          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY || secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER || secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD || secrets.CAP_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOLD_BRANCH: "claude-data"
+          CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
+          STATE_FILE: "claude_state.json"
+          LOOP_MINUTES: "14"
+          CYCLE_SECONDS: "20"
+          SCAN_PER_CYCLE: "40"         # كم سوق يحلل كل دورة (يدور على كل أسواق كابيتال)
+          REC_NODE_CALLS: "60"         # عدد طلبات قراءة قائمة الأسواق (مرة كل 24 ساعة)
+          SPREAD_MAX_PCT: "0.4"        # يتجاهل الأسواق ذات السبريد الكبير
+          STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
+          # ===== الخاطف: رصيد 1000€، هامش ≈200€ لكل صفقة، يفتح كلما وجد فرصة لكل صفقة، وقف 20€ وسلّم وقف بلا هدف، وكل ما تغلق وحدة تُفتح بدلها =====
+          TRADING_MODE: "scalp"        # فريم 15 دقيقة اتجاه، 5 دقائق إعداد، دقيقة زناد دخول
+          POSITION_MODE: "flex"   # إشارة قوية فقط، بلا عدد مطلوب
+          MARGIN_EUR: "100"   # هامش ≈100€ للصفقة
+          MARGIN_MIN: "75"
+          MARGIN_MAX: "125"
+          TRADE_EUR: "0"
+          MAX_TRADE_EUR: "30000"
+          TP_EUR: "4"
+          NO_TP: "1"                   # بلا هدف ربح ثابت
+          LADDER_TABLE: "2:1,3:2,5:3,7:5"   # سلّم مصغّر يناسب وقف 10€
+          LADDER_EXTRA_STEP: "3"
+          LADDER_EXTRA_LOCK: "3"
+          LADDER_TRAIL: "3"   # بعد +7 الوقف يلحق الربح بفارق 3
+          STRAT_BONUS: "bounce:20,retest:15,pullback:15,trend:-10"   # يفضّل المرتدات: ارتداد من مستوى أولاً ثم كسر وإعادة اختبار والتراجع داخل الاتجاه
+          RISK_EUR: "10"   # وقف أول: خسارة 10€ = 1% من الرصيد
+          REACH_ATR: "6"
+          SPREAD_STOP_FRAC: "0.3"
+          MIN_ATR_PCT: "0.05"          # فلتر السرعة: أسواق سريعة الحركة فقط
+          SPEED_BONUS: "50"            # الأسرع حركة أولوية
+          PRIORITY: "GOLD,OIL_CRUDE"   # الذهب والنفط يُفحصان كل دورة وبأفضلية
+          MAX_HOLD_MIN: "0"
+          NEWS_MODE: "require"
+          NEWS_MIN: "0.15"
+          NEWS_HOURS: "12"
+          NEWS_TTL_MIN: "20"
+          MIN_OPEN: "0"                # لا حد أدنى للصفقات
+          ACCOUNT: "Account 3"   # حساب Account 3 (تجريبي 1000€)
+          G_MAX_OPEN: "3"   # أقصى 3 صفقات بنفس الوقت
+          G_MAX_NEW: "1"   # صفقة جديدة بالدورة
+          MAX_PER_EPIC: "1"            # صفقة واحدة لكل سوق
+          MAX_PER_TYPE: "2"
+          G_MIN_SCORE: "55"   # إشارة أقوى
+          G_RELAX_SCORE: "55"
+          G_COOLDOWN_MIN: "5"
+          DAILY_LOSS_EUR: "30"   # 3% من الرصيد: يوقف باقي اليوم
+          STREAK_N: "3"
+          STREAK_PAUSE_MIN: "60"   # بعد 3 خسارات ورا بعض ← استراحة
+          BE_AT_R: "0.5"   # بعد ربح = نص الخسارة، الوقف يروح لسعر الدخول
+          SESSION_GMT: "0-24"
+          ALLOW_WEEKEND: "0"   # لا صفقات جديدة بالويكند
+          NEWS_BLACKOUT: "12:58-14:10,14:58-15:30"   # يتجنب فترات الأخبار الأمريكية الكبيرة
+          STOP_FILE: "STOP.txt"
