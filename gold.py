@@ -30,7 +30,17 @@ RELAX_SCORE = int(E("G_RELAX_SCORE", "20"))           # إذا الصفقات أ
 RR = TP_EUR / RISK_EUR
 NO_TP = E("NO_TP", "0") == "1"                         # 1 = بلا هدف ربح ثابت (الصفقة تكمل حتى يضربها الوقف المتحرّك)
 LADDER_STEP = float(E("LADDER_STEP", "0"))             # كل كم يورو ربح يرتفع مستوى الوقف (0 = معطّل)
-LADDER_LOCK = float(E("LADDER_LOCK", "0.6"))           # نسبة الربح المقفلة: ربح 5 → وقف عند +3، 10 → +6، 15 → +9 ...
+LADDER_LOCK = float(E("LADDER_LOCK", "0.6"))
+def _tbl(x):
+    out = []
+    for part in x.split(","):
+        if ":" in part:
+            a, b = part.split(":")[:2]
+            out.append((float(a), float(b)))
+    return sorted(out)
+LADDER_TABLE = _tbl(E("LADDER_TABLE", ""))               # مثال "3:2,5:3,7:5,10:7,12:9" = (الربح:الوقف المقفول بالربح)
+LADDER_EXTRA_STEP = float(E("LADDER_EXTRA_STEP", "0"))   # بعد آخر درجة: كل زيادة بالربح بهذا المقدار
+LADDER_EXTRA_LOCK = float(E("LADDER_EXTRA_LOCK", "0"))   # ... يرتفع الوقف المقفول بهذا المقدار           # نسبة الربح المقفلة: ربح 5 → وقف عند +3، 10 → +6، 15 → +9 ...
 LEVEL_STEP_DEFAULT = 50.0
 MARGIN_EUR = float(E("MARGIN_EUR", "0"))               # هامش كل صفقة (0 = معطّل): قيمة الصفقة = الهامش × الرافعة المتاحة للسوق
 MARGIN_MIN = float(E("MARGIN_MIN", "0"))                # أقل هامش مقبول للصفقة (0 = بلا حد أدنى)
@@ -66,6 +76,14 @@ CYCLE_SECONDS = float(E("CYCLE_SECONDS", "20"))
 GOLD_BRANCH = E("GOLD_BRANCH", "gold-data")
 STATE_FILE = E("STATE_FILE", "gold_state.json")
 DRY_RUN = E("DRY_RUN", "0") == "1"
+def _sb(x):
+    out = {}
+    for part in x.split(","):
+        if ":" in part:
+            k, v = part.split(":")[:2]
+            out[k.strip()] = float(v)
+    return out
+STRAT_BONUS = _sb(E("STRAT_BONUS", ""))                  # مثال "bounce:20,retest:15,pullback:15,trend:-10" = تفضيل المرتدات
 STRAT = {"trend": "اتجاه مؤكد", "bounce": "ارتداد من مستوى", "retest": "كسر وإعادة اختبار", "pullback": "تراجع داخل الاتجاه", "asia": "كسر كاذب لنطاق آسيا"}
 
 
@@ -306,6 +324,7 @@ def evaluate(H, M, S, now):
             i15 = len(M["c"]) - 1
             if (s["dir"] > 0 and M["r"][i15] > 75) or (s["dir"] < 0 and M["r"][i15] < 25):
                 score -= 10
+            score += STRAT_BONUS.get(key, 0)
             s["score"] = score
             if score < MIN_SCORE_NOW[0]:
                 status.append({"id": key, "name": STRAT[key], "state": "weak", "text": f"إشارة {'شراء' if s['dir'] > 0 else 'بيع'} لكن القوة {score} < {MIN_SCORE_NOW[0]}: {s['why']}"})
@@ -511,6 +530,23 @@ def reconcile(state, allpos):
             taken.add(match)
 
 
+def lad_calc(pnl):
+    """يرجع (رقم الدرجة، الربح المقفول بالوقف) لهذا الربح الحالي"""
+    if LADDER_TABLE:
+        n, lock = 0, 0.0
+        for i, (p, l) in enumerate(LADDER_TABLE):
+            if pnl >= p:
+                n, lock = i + 1, l
+        if n == len(LADDER_TABLE) and LADDER_EXTRA_STEP > 0:
+            k = int((pnl - LADDER_TABLE[-1][0]) // LADDER_EXTRA_STEP)
+            n, lock = n + k, lock + k * LADDER_EXTRA_LOCK
+        return n, lock
+    if LADDER_STEP > 0:
+        n = int(pnl // LADDER_STEP)
+        return n, n * LADDER_STEP * LADDER_LOCK
+    return 0, 0.0
+
+
 def ladder(cap, state, tr, pos, mk, buy, now_p, lvl):
     """سلّم الوقف: ربح n×STEP → الوقف يُقفل عند n×STEP×LOCK (5→3، 10→6، 15→9 ...) ولا يتراجع أبداً"""
     fx = tr.get("fx") or 1.08
@@ -521,14 +557,13 @@ def ladder(cap, state, tr, pos, mk, buy, now_p, lvl):
     else:
         pnl = float(pos.get("upl") or 0) / fx
     tr["pnl_eur"] = round(pnl, 2)
-    n = int(pnl // LADDER_STEP)
+    n, lock = lad_calc(pnl)
     if n < 1 or n <= tr.get("lad", 0):
         return
     if not lot:
         gain = (now_p - lvl) if buy else (lvl - now_p)
         if gain <= 0 or not float(pos.get("upl") or 0): return
         lot = float(pos["upl"]) / (gain * size)
-    lock = n * LADDER_STEP * LADDER_LOCK
     dist = lock * fx / (size * lot)
     want = lvl + dist if buy else lvl - dist
     m = cap.call("GET", f"/markets/{tr['epic']}")
@@ -607,7 +642,7 @@ def manage(cap, state, positions):
                     except Exception as e:
                         log("تعذّر التأمين:", e); continue
                 event(state, type="secure", market=tr.get("name"), dir=pos["direction"], price=new_stop, why="نقل الوقف لسعر الدخول")
-        if LADDER_STEP > 0:
+        if LADDER_STEP > 0 or LADDER_TABLE:
             try:
                 ladder(cap, state, tr, pos, mk, buy, now_p, lvl)
             except Exception as e:

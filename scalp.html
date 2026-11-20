@@ -120,12 +120,13 @@ async function load() {
     const t = new Date(e.t).toLocaleString("ar", {hour: "2-digit", minute: "2-digit", day: "numeric", month: "numeric"});
     if (e.type == "open") return `<div class="ev"><b class="${e.dir == "BUY" ? "up" : "down"}">${e.dir == "BUY" ? "🟢 شراء" : "🔴 بيع"}</b> ${esc(e.market)} — ${esc(e.strategy)} @ <span class="num">${fm(e.price)}</span> (≈${e.value_eur}€، قوة ${e.score})<br><small>${esc(e.why)}${e.pattern ? " — " + esc(e.pattern) : ""}${e.news && e.news[0] ? "<br>📰 " + esc(e.news[0]) : ""} | ${t}</small></div>`;
     if (e.type == "close") return `<div class="ev"><b>⚪ إغلاق</b> ${esc(e.market)} ${esc(e.dir)} <b class="num ${cls(e.pnl)}">${sg(e.pnl)}</b><br><small>${esc(e.why)} | ${t}</small></div>`;
+    if (e.type == "warn") return `<div class="ev"><b>⚠️ تنبيه</b> ${esc(e.market)}<br><small>${esc(e.why)} | ${t}</small></div>`;
     return `<div class="ev"><b>🔒 تأمين</b> <span class="num">${fm(e.price)}</span><br><small>${esc(e.why)} | ${t}</small></div>`;
   }).join("") : '<div class="empty">لا أحداث بعد.</div>';
   $("hist").innerHTML = d.history.length ? d.history.slice(0, 15).map(h => `<div class="ev row"><span class="chip5">${esc((h.t || "").slice(5, 16).replace("T", " "))}</span><b class="num ${cls(h.pnl)}">${sg(h.pnl)}</b></div>`).join("") : '<div class="empty">لا إغلاقات خلال 3 أيام.</div>';
   $("log").textContent = (d.log || []).join("\n");
   const s = d.settings;
-  $("note").textContent = `الأسواق: ${s.markets.join("، ")}. صفقات مفتوحة الآن ${s.open_now} (الهدف ${s.min_open}+ بحد أقصى ${s.max_open}). وقف -${s.risk_eur}€ وبلا هدف ثابت: عند ربح +5€ يرتفع الوقف لقفل +3€، عند +10€ لقفل +6€، عند +15€ لقفل +9€ وهكذا${s.hold_min ? "، إغلاق بالوقت بعد " + s.hold_min + " د" : ""}${s.daily_loss ? "، حد خسارة يومي " + s.daily_loss + "€" : ""}. حساب تجريبي: لا مال حقيقي ولا ضمان نتائج.`;
+  $("note").textContent = `الأسواق: ${s.markets.join("، ")}. صفقات مفتوحة الآن ${s.open_now} (الهدف ${s.min_open}+ بحد أقصى ${s.max_open}). وقف -${s.risk_eur}€ وبلا هدف ثابت: الوقف يرتفع مع الربح (+3€ ← +2€، +5€ ← +3€، +7€ ← +5€، +10€ ← +7€، +12€ ← +9€، ثم كل +5€ إضافية يرتفع الوقف +2€)${s.hold_min ? "، إغلاق بالوقت بعد " + s.hold_min + " د" : ""}${s.daily_loss ? "، حد خسارة يومي " + s.daily_loss + "€" : ""}. حساب تجريبي: لا مال حقيقي ولا ضمان نتائج.`;
 }
 $("rf").onclick = load; load(); setInterval(load, 60000);
 </script>
