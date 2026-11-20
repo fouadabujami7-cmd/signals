@@ -18,6 +18,12 @@ CANDS = {"DOLLAR": ["DXY", "USDOLLAR", "EURUSD"], "OIL_CRUDE": ["OIL_CRUDE", "CR
 STEPS = {"GOLD": 50.0, "SILVER": 1.0, "OIL_CRUDE": 1.0, "DOLLAR": 0.5}                         # المستويات المدوّرة لكل سوق
 LEVEL_STEP = 50.0
 NAMES = {"GOLD": "الذهب", "SILVER": "الفضة", "OIL_CRUDE": "النفط", "DOLLAR": "الدولار"}
+TRADING_MODE = E("TRADING_MODE", "swing").strip().lower()
+POSITION_MODE = E("POSITION_MODE", "fixed").strip().lower()
+if TRADING_MODE not in ("scalp", "swing"):
+    raise ValueError("TRADING_MODE must be scalp or swing")
+if POSITION_MODE not in ("fixed", "flex"):
+    raise ValueError("POSITION_MODE must be fixed or flex")
 RISK_EUR = float(E("RISK_EUR", "50"))                 # الوقف = خسارة بهذا المبلغ (يورو)
 TP_EUR = float(E("TP_EUR", "50"))                     # الهدف = ربح بهذا المبلغ (يورو)
 MIN_TRADE_EUR = float(E("TRADE_EUR", "500"))          # أقل قيمة للصفقة
@@ -42,6 +48,7 @@ def _tbl(x):
     return sorted(out)
 LADDER_TABLE = _tbl(E("LADDER_TABLE", ""))               # مثال "3:2,5:3,7:5,10:7,12:9" = (الربح:الوقف المقفول بالربح)
 LADDER_EXTRA_STEP = float(E("LADDER_EXTRA_STEP", "0"))   # بعد آخر درجة: كل زيادة بالربح بهذا المقدار
+LADDER_TRAIL = float(E("LADDER_TRAIL", "0"))             # بعد آخر درجة: الوقف يلحق الربح بمسافة ثابتة (كل خطوة كاملة يرتفع الوقف ليبقى أقل من الربح المبلَّغ بهذا المقدار)
 LADDER_EXTRA_LOCK = float(E("LADDER_EXTRA_LOCK", "0"))   # ... يرتفع الوقف المقفول بهذا المقدار           # نسبة الربح المقفلة: ربح 5 → وقف عند +3، 10 → +6، 15 → +9 ...
 LEVEL_STEP_DEFAULT = 50.0
 MARGIN_EUR = float(E("MARGIN_EUR", "0"))               # هامش كل صفقة (0 = معطّل): قيمة الصفقة = الهامش × الرافعة المتاحة للسوق
@@ -281,7 +288,7 @@ def s_trend(H, M, S, h1, m15):
     candle = cs[i]["c"] > cs[i]["o"] if d > 0 else cs[i]["c"] < cs[i]["o"]
     relaxed = MIN_SCORE_NOW[0] < MIN_SCORE            # أقل من العدد المطلوب من الصفقات: لا تردد، ادخل مع الاتجاه
     if not relaxed and (not aligned or not candle):
-        return None, "5 دقائق لا تؤكد الاتجاه بعد"
+        return None, "شمعة فريم الدخول لا تؤكد الاتجاه بعد"
     if not relaxed and ((d > 0 and S["r"][i] > 88) or (d < 0 and S["r"][i] < 12)):
         return None, "السعر متمدد (RSI متطرف)"
     look = cs[i - 5:i + 1]
@@ -431,15 +438,20 @@ def open_trade(cap, state, s, now, avail=None):
             log(f"{EPIC}: هامش الصفقة {margin:.0f} € خارج المجال المطلوب ({MARGIN_MIN:.0f}–{MARGIN_MAX or MARGIN_EUR * 1.3:.0f}) — تخطي"); return None
     if value < MIN_TRADE_EUR * 0.9 or value > MAX_TRADE_EUR * 1.5:
         log(f"{EPIC}: قيمة الصفقة {value:.0f} € خارج الحدود (أصغر حجم {min_size}) — تخطي"); return None
-    if avail is not None and avail < value * 0.25:
-        log(f"{EPIC}: الرصيد المتاح {avail:.0f} قليل لصفقة {value:.0f} € — تخطي"); return None
+    # Check the actual estimated margin, not a hard-coded 25% of notional.
+    # If Capital does not provide marginFactor, assume 100% margin (conservative).
+    required_margin = value * (mf / 100.0) if mf > 0 else value
+    if avail is not None and avail < required_margin:
+        log(f"{EPIC}: المتاح {avail:.2f}€ أقل من الهامش المطلوب تقريباً {required_margin:.2f}€ — تخطي"); return None
     dist = RISK_EUR * fx / (size * lot)                          # مسافة تعطي خسارة = RISK_EUR بالضبط
     tdist = TP_EUR * fx / (size * lot)
     mind = bot.min_dist(rules, "minStopOrProfitDistance", price) * 1.1
-    if REACH_ATR and s.get("atr") and tdist > REACH_ATR * s["atr"]:
-        log(f"{EPIC}: الهدف {tdist:.3f} بعيد (>{REACH_ATR:g}×ATR={s['atr']:.3f}) — تخطي"); return None
-    if tdist < spread * 2:
-        log(f"{EPIC}: الهدف أقرب من ضعف السبريد — تخطي"); return None
+    # A target-distance filter is irrelevant when NO_TP is enabled (trailing-stop exits).
+    if not NO_TP:
+        if REACH_ATR and s.get("atr") and tdist > REACH_ATR * s["atr"]:
+            log(f"{EPIC}: الهدف {tdist:.3f} بعيد (>{REACH_ATR:g}×ATR={s['atr']:.3f}) — تخطي"); return None
+        if tdist < spread * 2:
+            log(f"{EPIC}: الهدف أقرب من ضعف السبريد — تخطي"); return None
     if spread > SPREAD_STOP_FRAC * dist:
         log(f"{EPIC}: السبريد {spread:.4f} كبير مقارنة بالوقف {dist:.4f} — تخطي"); return None
     if dist < max(spread * 2.5, mind):
@@ -449,7 +461,7 @@ def open_trade(cap, state, s, now, avail=None):
     target = round(price + tdist if buy else price - tdist, dec)
     log(f"{EPIC}: {'🟢 شراء' if buy else '🔴 بيع'} [{STRAT[s['strategy']]}] حجم {size} (≈{value:.0f} €) @ {price} | وقف {stop} (-{RISK_EUR:.0f}€) | {('هدف ' + str(target) + ' (+' + format(TP_EUR, '.0f') + '€)') if not NO_TP else 'بلا هدف: وقف متحرّك'} | {s['why']}")
     if DRY_RUN:
-        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
+        return {"id": "dry", "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "margin": required_margin, "risk": RISK_EUR, "fx": fx, "lot": lot}
     order = {"epic": EPIC, "direction": "BUY" if buy else "SELL", "size": size, "stopLevel": stop, "guaranteedStop": False}
     if not NO_TP:
         order["profitLevel"] = target
@@ -464,7 +476,7 @@ def open_trade(cap, state, s, now, avail=None):
         return None
     ids = [c.get("dealId")] + [a.get("dealId") for a in c.get("affectedDeals", []) or []]
     ids = [i for i in dict.fromkeys(ids) if i]
-    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "risk": RISK_EUR, "fx": fx, "lot": lot}
+    return {"id": ids[0] if ids else ref, "ids": ids, "size": size, "price": price, "stop": stop, "target": None if NO_TP else target, "value": value, "margin": required_margin, "risk": RISK_EUR, "fx": fx, "lot": lot}
 
 
 def event(state, **kw):
@@ -541,7 +553,11 @@ def lad_calc(pnl):
                 n, lock = i + 1, l
         if n == len(LADDER_TABLE) and LADDER_EXTRA_STEP > 0:
             k = int((pnl - LADDER_TABLE[-1][0]) // LADDER_EXTRA_STEP)
-            n, lock = n + k, lock + k * LADDER_EXTRA_LOCK
+            if LADDER_TRAIL > 0 and k > 0:
+                lock = max(lock, LADDER_TABLE[-1][0] + k * LADDER_EXTRA_STEP - LADDER_TRAIL)
+                n = n + k
+            else:
+                n, lock = n + k, lock + k * LADDER_EXTRA_LOCK
         return n, lock
     if LADDER_STEP > 0:
         n = int(pnl // LADDER_STEP)
@@ -677,7 +693,11 @@ def auto_step(price):
 def analyze_market(cap, name, ep, now, price0=None):
     global EPIC, LEVEL_STEP
     EPIC, LEVEL_STEP = ep, STEPS.get(name) or (auto_step(price0) if price0 else LEVEL_STEP_DEFAULT)
-    H, M, S = prep(candles(cap, "HOUR", 200)), prep(candles(cap, "MINUTE_15", 200)), prep(candles(cap, "MINUTE_5", 150))
+    # SCALP: 15m trend context, 5m setup, 1m trigger. Other modes retain legacy frames.
+    if TRADING_MODE == "scalp":
+        H, M, S = prep(candles(cap, "MINUTE_15", 200)), prep(candles(cap, "MINUTE_5", 200)), prep(candles(cap, "MINUTE", 200))
+    else:
+        H, M, S = prep(candles(cap, "HOUR", 200)), prep(candles(cap, "MINUTE_15", 200)), prep(candles(cap, "MINUTE_5", 150))
     ev = evaluate(H, M, S, now)
     ev.update(name=name, ep=ep, H=H, M=M, S=S, price=S["c"][-1], step=LEVEL_STEP)
     return ev
@@ -720,7 +740,9 @@ def pick_account(cap):
     accs = cap.call("GET", "/accounts").get("accounts", [])
     for i, x in enumerate(accs, 1):
         log(f"👤 حساب {i}: {x.get('accountName')} | id={x.get('accountId')} | رصيد {(x.get('balance') or {}).get('balance')}{' | الافتراضي' if x.get('preferred') else ''}")
-    if not ACCOUNT_SEL or not accs:
+    if not accs:
+        raise SystemExit("⛔ لم تُرجع Capital.com أي حساب؛ أوقف التشغيل لحماية الحساب")
+    if not ACCOUNT_SEL:
         return
     sel = ACCOUNT_SEL.lower()
     t = next((x for x in accs if str(x.get("accountId")) == ACCOUNT_SEL), None)
@@ -729,8 +751,7 @@ def pick_account(cap):
     if t is None:
         t = next((x for x in accs if sel in str(x.get("accountName", "")).lower()), None)
     if t is None:
-        log(f"⚠️ ما لقيت حساب يطابق '{ACCOUNT_SEL}' — أكمل على الافتراضي")
-        return
+        raise SystemExit(f"⛔ لم أجد الحساب المحدد '{ACCOUNT_SEL}' — لن أتابع على حساب آخر")
     ACC_ID = t.get("accountId")
     if not t.get("preferred"):
         cap.call("PUT", "/session", {"accountId": ACC_ID})
@@ -740,7 +761,11 @@ def pick_account(cap):
 def cycle(cap, state, now, ctx):
     global EPIC, LEVEL_STEP
     acc = cap.call("GET", "/accounts").get("accounts", [])
-    a = next((x for x in acc if ACC_ID and x.get("accountId") == ACC_ID), None) or next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
+    a = next((x for x in acc if ACC_ID and x.get("accountId") == ACC_ID), None)
+    if ACC_ID and a is None:
+        raise RuntimeError("الحساب المختار لم يعد موجوداً في الجلسة؛ أوقف فتح الصفقات")
+    if a is None:
+        a = next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
     bal = float((a.get("balance") or {}).get("balance") or 0)
     allpos = cap.call("GET", "/positions").get("positions", [])
     trades = state.setdefault("trades", {})
@@ -764,7 +789,8 @@ def cycle(cap, state, now, ctx):
     if halt:
         log("⛔ " + halt)
     state["halt"] = halt
-    MIN_SCORE_NOW[0] = RELAX_SCORE if n_open < MIN_OPEN else MIN_SCORE
+    # Flex never opens trades just to fill a target count; it only takes qualified signals.
+    MIN_SCORE_NOW[0] = MIN_SCORE if POSITION_MODE == "flex" else (RELAX_SCORE if n_open < MIN_OPEN else MIN_SCORE)
     cands = []
     for ev in evs:                                    # إعادة التقييم بالحد الحالي (نخفّفه إذا الصفقات أقل من المطلوب)
         EPIC, LEVEL_STEP = ev["ep"], ev["step"]
@@ -834,7 +860,7 @@ def cycle(cap, state, now, ctx):
         seen[key] = stamp
         if res:
             opened += 1
-            avail -= res["value"] * 0.25
+            avail -= res.get("margin", res["value"])
             cool[key] = time.time()
             trades[res["id"]] = {"ids": res.get("ids") or [res["id"]], "size0": res["size"], "fx": res.get("fx"), "name": DISP.get(name, name), "epic": ep, "strategy": s["strategy"], "dir": "BUY" if s["dir"] > 0 else "SELL", "entry": res["price"],
                                  "sl": res["stop"], "tp": res["target"], "lot": res.get("lot"), "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "why": s["why"], "size": res["size"]}
@@ -867,7 +893,7 @@ def publish(cap, state, bal, mine, fx, now, n_open):
             "day_pnl": round(realized + sum(o["pnl"] for o in open_v), 2), "open": open_v, "history": hist,
             "analysis": state.get("analysis"), "events": state.get("events", [])[::-1][:80], "log": list(bot.LOG_BUF)[-50:],
             "halt": state.get("halt"), "day": state.get("day"), "settings": {"hold_min": MAX_HOLD_MIN, "daily_loss": DAILY_LOSS_EUR, "min_trade_eur": MIN_TRADE_EUR, "risk_eur": RISK_EUR, "tp_eur": TP_EUR, "min_open": MIN_OPEN, "max_open": G_MAX_OPEN,
-                         "min_score": MIN_SCORE, "relax_score": RELAX_SCORE, "markets": [f"كل الأسواق ({state.get('scan_total', 0)})"],
+                         "min_score": MIN_SCORE, "relax_score": RELAX_SCORE, "trading_mode": TRADING_MODE, "position_mode": POSITION_MODE, "markets": [f"كل الأسواق ({state.get('scan_total', 0)})"],
                          "news_blackout": NEWS_BLACKOUT, "open_now": n_open}}
     if bot.PUBLISH_ON:
         bot.push_file("gold.json", data, GOLD_BRANCH)
@@ -906,7 +932,7 @@ def main():
     for ep, v in uni.items():
         DISP.setdefault(ep, v["n"])
     log(f"🔒 سلّم الوقف: {'جدول ' + str(LADDER_TABLE) + ' ثم كل +' + format(LADDER_EXTRA_STEP, 'g') + '€ ← +' + format(LADDER_EXTRA_LOCK, 'g') + '€' if LADDER_TABLE else ('كل ' + format(LADDER_STEP, 'g') + '€ يقفل ' + format(LADDER_LOCK * 100, '.0f') + '%' if LADDER_STEP else 'معطّل')} | بلا هدف ثابت: {NO_TP} | مرتدات: {STRAT_BONUS or 'لا'}")
-    log(f"🌍 يراقب {len(uni)} سوقاً (كل شي قابل للتداول) | صفقة ≥{MIN_TRADE_EUR:.0f}€ | وقف -{RISK_EUR:.0f}€ هدف +{TP_EUR:.0f}€ | هدف: {MIN_OPEN}+ صفقات معاً")
+    log(f"🌍 الوضع: {TRADING_MODE} | إدارة الصفقات: {POSITION_MODE} | يراقب {len(uni)} سوقاً | وقف اسمي -{RISK_EUR:.0f}€ | حد أقصى {G_MAX_OPEN or 'بلا حد'} صفقة")
     end = time.time() + LOOP_MINUTES * 60
     while True:
         now = datetime.now(timezone.utc)
