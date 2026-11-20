@@ -23,6 +23,8 @@ TP_EUR = float(E("TP_EUR", "50"))                     # الهدف = ربح به
 MIN_TRADE_EUR = float(E("TRADE_EUR", "500"))          # أقل قيمة للصفقة
 MAX_TRADE_EUR = float(E("MAX_TRADE_EUR", "8000"))     # أعلى قيمة للصفقة
 MIN_OPEN = int(E("MIN_OPEN", "10"))                    # يحاول إبقاء هذا العدد من الصفقات مفتوحاً
+ACCOUNT_SEL = E("ACCOUNT", "").strip()               # اختيار الحساب: رقمه بالقائمة (1،2..) أو جزء من اسمه أو الـaccountId. فارغ = الافتراضي
+ACC_ID = None
 G_MAX_OPEN = int(E("G_MAX_OPEN", "20"))               # سقف الصفقات المفتوحة (0 = بلا حد)
 G_MAX_NEW = int(E("G_MAX_NEW", "5"))                  # أقصى صفقات جديدة بالدورة
 MIN_SCORE = int(E("G_MIN_SCORE", "35"))
@@ -712,10 +714,33 @@ def pick_markets(cap, state, ctx):
     return out
 
 
+def pick_account(cap):
+    """يبدّل الجلسة للحساب المطلوب (ACCOUNT) ويكتب قائمة الحسابات بالسجل."""
+    global ACC_ID
+    accs = cap.call("GET", "/accounts").get("accounts", [])
+    for i, x in enumerate(accs, 1):
+        log(f"👤 حساب {i}: {x.get('accountName')} | id={x.get('accountId')} | رصيد {(x.get('balance') or {}).get('balance')}{' | الافتراضي' if x.get('preferred') else ''}")
+    if not ACCOUNT_SEL or not accs:
+        return
+    sel = ACCOUNT_SEL.lower()
+    t = next((x for x in accs if str(x.get("accountId")) == ACCOUNT_SEL), None)
+    if t is None and sel.isdigit() and 1 <= int(sel) <= len(accs):
+        t = accs[int(sel) - 1]
+    if t is None:
+        t = next((x for x in accs if sel in str(x.get("accountName", "")).lower()), None)
+    if t is None:
+        log(f"⚠️ ما لقيت حساب يطابق '{ACCOUNT_SEL}' — أكمل على الافتراضي")
+        return
+    ACC_ID = t.get("accountId")
+    if not t.get("preferred"):
+        cap.call("PUT", "/session", {"accountId": ACC_ID})
+    log(f"✅ الحساب المختار: {t.get('accountName')} (id={ACC_ID})")
+
+
 def cycle(cap, state, now, ctx):
     global EPIC, LEVEL_STEP
     acc = cap.call("GET", "/accounts").get("accounts", [])
-    a = next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
+    a = next((x for x in acc if ACC_ID and x.get("accountId") == ACC_ID), None) or next((x for x in acc if x.get("preferred")), acc[0] if acc else {})
     bal = float((a.get("balance") or {}).get("balance") or 0)
     allpos = cap.call("GET", "/positions").get("positions", [])
     trades = state.setdefault("trades", {})
@@ -856,7 +881,17 @@ def main():
     bot.STATE_FILE = STATE_FILE
     state = bot.load_state()
     cap = bot.Capital()
+    _orig_login = bot.Capital.login
+    def _login(self):
+        _orig_login(self)
+        if ACC_ID:
+            try:
+                bot.http("PUT", bot.BASE + "/session", self._h(), {"accountId": ACC_ID})
+            except Exception as e:
+                log("⚠️ تعذّر إعادة اختيار الحساب:", str(e)[:100])
+    bot.Capital.login = _login
     cap.login()
+    pick_account(cap)
     uni = bot.build_rec_universe(cap, state)
     bot.save_state(state)
     if ONLY_EPICS:
