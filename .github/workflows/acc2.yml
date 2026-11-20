@@ -24,10 +24,10 @@ jobs:
           restore-keys: acc2-state-
       - run: python gold.py
         env:
-          # مفاتيح Demo فقط؛ لا تستخدم أسرار الحساب الحقيقي كخطة بديلة
-          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY }}
-          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER }}
-          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD }}
+          # مفاتيح الحساب التجريبي (إن لم تضفها يستخدم المفاتيح العادية؛ البوت يعمل على Demo فقط)
+          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY || secrets.CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER || secrets.CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD || secrets.CAP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOLD_BRANCH: "acc2-data"
           CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
