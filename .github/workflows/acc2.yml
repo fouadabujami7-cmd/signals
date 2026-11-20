@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 16
     permissions:
-      contents: write        # لنشر acc2 على فرع acc2-data فقط
+      contents: write        # لنشر gold.json على فرع gold-data فقط
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,13 +24,12 @@ jobs:
           restore-keys: acc2-state-
       - run: python gold.py
         env:
-          # مفاتيح الحساب التجريبي (إن لم تضفها يستخدم المفاتيح العادية)
-          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY || secrets.CAP_API_KEY }}
-          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER || secrets.CAP_IDENTIFIER }}
-          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD || secrets.CAP_PASSWORD }}
+          # مفاتيح Demo فقط؛ لا تستخدم أسرار الحساب الحقيقي كخطة بديلة
+          CAP_API_KEY: ${{ secrets.DEMO_CAP_API_KEY }}
+          CAP_IDENTIFIER: ${{ secrets.DEMO_CAP_IDENTIFIER }}
+          CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOLD_BRANCH: "acc2-data"
-          ACCOUNT_NAME: "Account 2"    # يتداول فقط على Account 2 (رأس مال 1000€)
           CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
           STATE_FILE: "acc2_state.json"
           LOOP_MINUTES: "14"
@@ -39,17 +38,20 @@ jobs:
           REC_NODE_CALLS: "60"         # عدد طلبات قراءة قائمة الأسواق (مرة كل 24 ساعة)
           SPREAD_MAX_PCT: "0.4"        # يتجاهل الأسواق ذات السبريد الكبير
           STOCK_NODES_RE: "share|stock|aktie|equit|accion|azioni|action"
-          # ===== نسخة الخاطف لحساب 2: 5 صفقات فقط، هامش ≈200€ لكل صفقة، باقي الإعدادات نفس الخاطف تماماً =====
-          MARGIN_EUR: "200"            # هامش كل صفقة ≈200 يورو بأكبر رافعة يسمح بها السوق
-          MARGIN_MIN: "170"            # لا أقل من 170 يورو
-          MARGIN_MAX: "230"            # ولا أكثر من 230 يورو
+          # ===== الخاطف: رصيد 1000€، هامش ≈200€ لكل صفقة، يفتح كلما وجد فرصة لكل صفقة، وقف 20€ وسلّم وقف بلا هدف، وكل ما تغلق وحدة تُفتح بدلها =====
+          TRADING_MODE: "scalp"        # فريم 15 دقيقة اتجاه، 5 دقائق إعداد، دقيقة زناد دخول
+          POSITION_MODE: "flex"        # يفتح صفقة كلما وجد فرصة قوية، بلا عدد مطلوب
+          MARGIN_EUR: "200"            # هامش كل صفقة ≈300 يورو بأكبر رافعة يسمح بها السوق
+          MARGIN_MIN: "150"            # لا أقل من 250 يورو
+          MARGIN_MAX: "250"            # ولا أكثر من 350 يورو
           TRADE_EUR: "0"
           MAX_TRADE_EUR: "30000"
           TP_EUR: "5"                  # أول درجة (تُستعمل لفحص الجدوى فقط)
           NO_TP: "1"                   # بلا هدف ربح ثابت
-          LADDER_TABLE: "3:2,5:3,7:5,10:7,12:9"   # ربح:وقف مقفول. +3←+2، +5←+3، +7←+5، +10←+7، +12←+9
+          LADDER_TABLE: "3:2,5:3,7:5,10:7,12:9"   # ربح:وقف مقفول
           LADDER_EXTRA_STEP: "5"       # بعد +12: كل +5 ربح إضافية
-          LADDER_EXTRA_LOCK: "2"       # يرتفع الوقف +2 (17←+11، 22←+13، 27←+15 ...)
+          LADDER_EXTRA_LOCK: "5"       # (احتياط)
+          LADDER_TRAIL: "5"            # بعد +12 الوقف يلحق الربح بفارق 5: 17←+12، 22←+17، 27←+22 ...
           STRAT_BONUS: "bounce:20,retest:15,pullback:15,trend:-10"   # يفضّل المرتدات: ارتداد من مستوى أولاً ثم كسر وإعادة اختبار والتراجع داخل الاتجاه
           RISK_EUR: "20"               # الوقف الأول: خسارة 20 يورو
           REACH_ATR: "6"
@@ -62,18 +64,19 @@ jobs:
           NEWS_MIN: "0.15"
           NEWS_HOURS: "12"
           NEWS_TTL_MIN: "20"
-          MIN_OPEN: "5"                # يبقي 5 صفقات: كل ما تنسكر وحدة يفتح بدلها
-          G_MAX_OPEN: "5"              # أقصى 5 صفقات معاً
-          G_MAX_NEW: "30"                 # يفتح كل الفرص دفعة وحدة
+          MIN_OPEN: "0"                # لا حد أدنى للصفقات
+          ACCOUNT: "Account 2"         # الحساب الثالث بالقائمة (اسمه Account 2)
+          G_MAX_OPEN: "0"              # بلا سقف للعدد: يحدّه رأس المال المتاح فقط
+          G_MAX_NEW: "5"               # حتى 5 صفقات جديدة بالدورة
           MAX_PER_EPIC: "1"            # صفقة واحدة لكل سوق
-          MAX_PER_TYPE: "12"           # حتى 12 صفقة من نفس النوع (تنويع: أسهم/سلع/مؤشرات/عملات/كريبتو)
+          MAX_PER_TYPE: "5"           # حتى 5 صفقات من نفس النوع (تنويع)
           G_MIN_SCORE: "40"
           G_RELAX_SCORE: "25"
           G_COOLDOWN_MIN: "3"
-          DAILY_LOSS_EUR: "200"        # حد الخسارة اليومية
+          DAILY_LOSS_EUR: "200"        # إذا خسر 200€ باليوم يوقف الفتح لباقي اليوم
           STREAK_N: "0"                # بلا استراحة بعد خسائر متتالية (حتى يعوّض فوراً)
           BE_AT_R: "0"
           SESSION_GMT: "0-24"
           ALLOW_WEEKEND: "1"
           NEWS_BLACKOUT: "13:28-13:38,14:58-15:08"
-          STOP_FILE: "STOP_ACC2.txt"   # زر إيقاف خاص بهذا البوت
+          STOP_FILE: "STOP.txt"
