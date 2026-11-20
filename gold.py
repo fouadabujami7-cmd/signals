@@ -31,6 +31,7 @@ MAX_TRADE_EUR = float(E("MAX_TRADE_EUR", "8000"))     # أعلى قيمة للص
 MIN_OPEN = int(E("MIN_OPEN", "10"))                    # يحاول إبقاء هذا العدد من الصفقات مفتوحاً
 ACCOUNT_SEL = E("ACCOUNT", "").strip()               # اختيار الحساب: رقمه بالقائمة (1،2..) أو جزء من اسمه أو الـaccountId. فارغ = الافتراضي
 ACC_ID = None
+ADOPT = E("ADOPT", "0") == "1"                      # يتبنّى صفقات الحساب غير المتتبَّعة (بعد ضياع الذاكرة) ويطبّق عليها السلّم
 G_MAX_OPEN = int(E("G_MAX_OPEN", "20"))               # سقف الصفقات المفتوحة (0 = بلا حد)
 G_MAX_NEW = int(E("G_MAX_NEW", "5"))                  # أقصى صفقات جديدة بالدورة
 MIN_SCORE = int(E("G_MIN_SCORE", "35"))
@@ -770,6 +771,18 @@ def cycle(cap, state, now, ctx):
     allpos = cap.call("GET", "/positions").get("positions", [])
     trades = state.setdefault("trades", {})
     reconcile(state, allpos)
+    if ADOPT:
+        fx0 = fx_for(cap, "USD") or 1.08
+        for p in allpos:
+            pos, mk0 = p["position"], p["market"]
+            did = pos["dealId"]
+            if did in trades or any(did in (t.get("ids") or []) for t in trades.values()):
+                continue
+            ep0 = mk0.get("epic")
+            trades[did] = {"ids": [did], "size0": pos["size"], "size": pos["size"], "fx": fx0, "name": DISP.get(ep0) or mk0.get("instrumentName") or ep0,
+                           "epic": ep0, "strategy": "trend", "dir": pos["direction"], "entry": float(pos["level"]), "sl": pos.get("stopLevel"), "tp": pos.get("profitLevel"),
+                           "lot": None, "t": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "why": "صفقة متبنّاة (ضاعت الذاكرة)", "adopted": True}
+            log(f"🤝 تبنّيت صفقة {trades[did]['name']} {pos['direction']} (رقم {did}) لتطبيق السلّم عليها")
     mine = [p for p in allpos if p["position"]["dealId"] in trades]
     manage(cap, state, mine)
     mine = [p for p in mine if p["position"]["dealId"] in trades]
