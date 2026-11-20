@@ -30,6 +30,7 @@ jobs:
           CAP_PASSWORD: ${{ secrets.DEMO_CAP_PASSWORD || secrets.CAP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOLD_BRANCH: "scalp-data"
+          ACCOUNT_NAME: "Account 1"    # ثابت على Account 1
           CAP_ENV: "demo"              # تجريبي فقط — الروبوت يرفض العمل على الحقيقي
           STATE_FILE: "scalp_state.json"
           LOOP_MINUTES: "14"
